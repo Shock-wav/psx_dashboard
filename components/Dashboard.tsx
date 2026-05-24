@@ -136,6 +136,10 @@ export default function Dashboard() {
   const [tab, setTab] = useState<"opportunities" | "holdings" | "watching">("opportunities");
   const [newHolding, setNewHolding] = useState({ ticker: "", shares: "", avg: "" });
   const [newWatch, setNewWatch] = useState("");
+  const [holdingError, setHoldingError] = useState("");
+  const [watchError, setWatchError] = useState("");
+  const [addingHolding, setAddingHolding] = useState(false);
+  const [addingWatch, setAddingWatch] = useState(false);
 
   // ── Price fetching ──────────────────────────────────────────────────────
   const allTickers = [...new Set([
@@ -224,18 +228,79 @@ export default function Dashboard() {
     setScanning(false); setScanPhase("");
   };
 
+  // KMI-30 list for Shariah auto-detection (client-side)
+  const KMI30 = new Set([
+    "MEBL","HBL","UBL","MCB","BAHL",
+    "OGDC","PPL","PSO","MARI","POL",
+    "LUCK","MLCF","CHCC","DGKC","PIOC",
+    "ENGRO","EFERT","FFC","FATIMA","NRL",
+    "HUBC","KAPCO","KEL","NCPL","PKGP",
+    "SYS","TRG","AVN","COLG","EPCL",
+  ]);
+
+  /** Validate ticker exists on PSX by calling the prices API. */
+  async function validateTicker(symbol: string): Promise<{ valid: boolean; quote?: StockQuote }> {
+    try {
+      const res = await fetch("/api/prices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols: [symbol] }),
+      });
+      if (!res.ok) return { valid: false };
+      const data: Record<string, StockQuote> = await res.json();
+      const quote = data[symbol];
+      return quote ? { valid: true, quote } : { valid: false };
+    } catch {
+      return { valid: false };
+    }
+  }
+
   // ── Holdings helpers ────────────────────────────────────────────────────
-  const addHolding = () => {
-    if (!newHolding.ticker || !newHolding.shares || !newHolding.avg) return;
-    const t = newHolding.ticker.toUpperCase().trim();
-    setHoldings(prev => [...prev.filter(h => h.ticker !== t), { ticker: t, name: t, shares: parseFloat(newHolding.shares), avgPrice: parseFloat(newHolding.avg), shariah: true }]);
+  const addHolding = async () => {
+    const t = newHolding.ticker.toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
+    const shares = parseFloat(newHolding.shares);
+    const avg = parseFloat(newHolding.avg);
+    if (!t) { setHoldingError("Enter a ticker symbol (e.g. OGDC)."); return; }
+    if (!shares || shares <= 0) { setHoldingError("Enter a valid number of shares."); return; }
+    if (!avg || avg <= 0) { setHoldingError("Enter a valid average purchase price."); return; }
+    setHoldingError("");
+    setAddingHolding(true);
+    const { valid, quote } = await validateTicker(t);
+    setAddingHolding(false);
+    if (!valid) {
+      setHoldingError(`"${t}" not found on PSX. Check the ticker symbol and try again.`);
+      return;
+    }
+    const isShariah = KMI30.has(t);
+    // Update prices immediately with the validated quote
+    if (quote) setPrices(prev => ({ ...prev, [t]: quote }));
+    setHoldings(prev => [...prev.filter(h => h.ticker !== t), {
+      ticker: t,
+      name: quote?.sector ? `${t} · ${quote.sector}` : t,
+      shares,
+      avgPrice: avg,
+      shariah: isShariah,
+    }]);
     setNewHolding({ ticker: "", shares: "", avg: "" });
   };
-  const addWatch = () => {
-    if (!newWatch.trim()) return;
+
+  const addWatch = async () => {
     const t = newWatch.toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
     if (!t) return;
-    if (!watching.find(w => w.ticker === t)) setWatching(prev => [...prev, { ticker: t, name: t }]);
+    if (watching.find(w => w.ticker === t)) { setNewWatch(""); return; }
+    setWatchError("");
+    setAddingWatch(true);
+    const { valid, quote } = await validateTicker(t);
+    setAddingWatch(false);
+    if (!valid) {
+      setWatchError(`"${t}" not found on PSX. Check the ticker symbol.`);
+      return;
+    }
+    if (quote) setPrices(prev => ({ ...prev, [t]: quote }));
+    setWatching(prev => [...prev, {
+      ticker: t,
+      name: quote?.sector ? `${t} · ${quote.sector}` : t,
+    }]);
     setNewWatch("");
   };
 
@@ -304,8 +369,9 @@ export default function Dashboard() {
             </div>
 
             {scanError && (
-              <div style={{ ...cardStyle, color: C.redText, fontSize: 11 }}>
-                ✗ {scanError}
+              <div style={{ ...cardStyle, background: C.redDim, border: `0.5px solid ${C.red}`, display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <span style={{ color: C.redText, fontSize: 11, flex: 1, lineHeight: 1.5 }}>✗ {scanError}</span>
+                <button onClick={() => setScanError("")} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px", flexShrink: 0 }}>×</button>
               </div>
             )}
 
@@ -472,11 +538,19 @@ export default function Dashboard() {
                 </div>
               );
             })}
+            {holdingError && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", background: C.redDim, border: `0.5px solid ${C.red}`, borderRadius: 6, marginTop: 6 }}>
+                <span style={{ fontSize: 10, color: C.redText, flex: 1 }}>✗ {holdingError}</span>
+                <button onClick={() => setHoldingError("")} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <input style={{ ...inputSt, width: 60 }} placeholder="Ticker" value={newHolding.ticker} onChange={e => setNewHolding(p => ({ ...p, ticker: e.target.value }))} onKeyDown={e => e.key === "Enter" && addHolding()} />
+              <input style={{ ...inputSt, width: 60 }} placeholder="Ticker" value={newHolding.ticker} onChange={e => setNewHolding(p => ({ ...p, ticker: e.target.value.toUpperCase() }))} onKeyDown={e => e.key === "Enter" && addHolding()} />
               <input style={{ ...inputSt, width: 70 }} placeholder="Shares" type="text" inputMode="numeric" value={newHolding.shares} onChange={e => setNewHolding(p => ({ ...p, shares: e.target.value.replace(/[^0-9.]/g, "") }))} />
               <input style={{ ...inputSt, width: 70 }} placeholder="Avg PKR" type="text" inputMode="numeric" value={newHolding.avg} onChange={e => setNewHolding(p => ({ ...p, avg: e.target.value.replace(/[^0-9.]/g, "") }))} />
-              <button onClick={addHolding} style={btnSt}>Add</button>
+              <button onClick={addHolding} disabled={addingHolding} style={{ ...btnSt, opacity: addingHolding ? 0.5 : 1 }}>
+                {addingHolding ? "…" : "Add"}
+              </button>
             </div>
           </div>
         )}
@@ -517,9 +591,17 @@ export default function Dashboard() {
                 </div>
               );
             })}
+            {watchError && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", background: C.redDim, border: `0.5px solid ${C.red}`, borderRadius: 6, marginBottom: 6 }}>
+                <span style={{ fontSize: 10, color: C.redText, flex: 1 }}>✗ {watchError}</span>
+                <button onClick={() => setWatchError("")} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <input style={inputSt} placeholder="e.g. PPL" value={newWatch} onChange={e => setNewWatch(e.target.value)} onKeyDown={e => e.key === "Enter" && addWatch()} />
-              <button onClick={addWatch} style={btnSt}>Add</button>
+              <input style={inputSt} placeholder="e.g. PPL" value={newWatch} onChange={e => setNewWatch(e.target.value.toUpperCase())} onKeyDown={e => e.key === "Enter" && addWatch()} />
+              <button onClick={addWatch} disabled={addingWatch} style={{ ...btnSt, opacity: addingWatch ? 0.5 : 1 }}>
+                {addingWatch ? "…" : "Add"}
+              </button>
             </div>
           </div>
         )}
