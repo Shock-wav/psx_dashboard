@@ -179,7 +179,17 @@ export default function Dashboard() {
         body: JSON.stringify({ provider: settings.provider, apiKey: settings.apiKey, model: settings.model, mode: "full" }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Scan failed");
+      if (!res.ok) {
+        // Clean up common API errors into readable messages
+        const raw = data.error ?? "Scan failed";
+        if (raw.includes("quota") || raw.includes("429") || raw.includes("Too Many Requests"))
+          throw new Error("API quota exceeded. Add billing to your AI provider account, or switch providers in Settings.");
+        if (raw.includes("401") || raw.includes("403") || raw.includes("invalid") || raw.includes("API key"))
+          throw new Error("Invalid API key. Double-check it in Settings — make sure you copied the full key.");
+        if (raw.includes("CORS") || raw.includes("fetch"))
+          throw new Error("Network error reaching the AI provider. Try again in a moment.");
+        throw new Error(raw.length > 120 ? raw.slice(0, 120) + "…" : raw);
+      }
       setScanPhase("Pass 2 · Scoring technicals & selecting best picks…");
       setScanResult({
         signals: data.signals ?? [],
