@@ -41,6 +41,7 @@ function ConfBar({ pct, signal }: { pct: number; signal?: string }) {
             : signal === "HOLD" ? C.amber : C.blue;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+      <span style={{ fontSize: 9, color: C.dim, whiteSpace: "nowrap" }}>AI confidence</span>
       <div style={{ flex: 1, height: 2, background: C.border2, borderRadius: 2 }}>
         <div style={{ width: `${pct}%`, height: 2, background: col, borderRadius: 2, transition: "width 0.6s ease" }} />
       </div>
@@ -74,6 +75,20 @@ function PKTClock() {
       <span>KSE-100 · {t} PKT · {open ? "Open" : "Closed"}</span>
     </div>
   );
+}
+
+// ─── Technical data (from /api/technicals) ─────────────────────────────────
+interface StockTech {
+  symbol: string;
+  compositeScore: number;
+  technicalSignal: string;
+  rsi: number;
+  ema20: number;
+  ema50: number;
+  volumeRatio: number;
+  crossoverSignal: string;
+  priceVsEma20: string;
+  reasons: string[];
 }
 
 // ─── Holdings ──────────────────────────────────────────────────────────────
@@ -127,6 +142,9 @@ export default function Dashboard() {
   // Watch signals (separate lightweight scan)
   const [watchSignals, setWatchSignals] = useState<Record<string, AISignal>>({});
   const [loadingWatchAI, setLoadingWatchAI] = useState(false);
+  // Watchlist technical data (from /api/technicals)
+  const [watchTech, setWatchTech] = useState<Record<string, StockTech>>({});
+  const [loadingWatchTech, setLoadingWatchTech] = useState(false);
 
   // Settings
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
@@ -304,6 +322,45 @@ export default function Dashboard() {
     setNewWatch("");
   };
 
+  // ── Quick-add from scan results (no PSX validation needed) ─────────────
+  const quickAddWatch = (ticker: string) => {
+    if (!watching.find(w => w.ticker === ticker)) {
+      setWatching(prev => [...prev, { ticker, name: ticker }]);
+    }
+  };
+
+  // ── Fetch technicals for all watchlist tickers ───────────────────────────
+  const fetchWatchTech = async () => {
+    if (!watching.length) return;
+    setLoadingWatchTech(true);
+    const results: Record<string, StockTech> = {};
+    await Promise.allSettled(
+      watching.map(async (w) => {
+        try {
+          const res = await fetch(`/api/technicals?symbol=${w.ticker}`);
+          if (res.ok) results[w.ticker] = await res.json();
+        } catch { /* ignore */ }
+      })
+    );
+    setWatchTech(prev => ({ ...prev, ...results }));
+    setLoadingWatchTech(false);
+  };
+
+  // ── Holding suggestion from scan data or P&L ────────────────────────────
+  const getHoldingSuggestion = (ticker: string, pnlPct: number | null) => {
+    const aiSig = scanResult?.signals.find(s => s.ticker === ticker);
+    if (aiSig) return { signal: aiSig.signal, text: aiSig.reason, source: "AI scan" };
+    const tech = watchTech[ticker] as StockTech | undefined;
+    if (tech) return { signal: tech.technicalSignal, text: tech.reasons[0] ?? "Based on technicals", source: "Technicals" };
+    if (pnlPct !== null) {
+      if (pnlPct >= 20) return { signal: "HOLD", text: "Up 20%+ — consider booking partial profits", source: "P&L" };
+      if (pnlPct >= 5)  return { signal: "HOLD", text: "In profit — hold and monitor for continuation", source: "P&L" };
+      if (pnlPct >= -8) return { signal: "HOLD", text: "Near cost — hold and watch for a move", source: "P&L" };
+      return { signal: "WATCH", text: "Down significantly — run a scan for full AI analysis", source: "P&L" };
+    }
+    return null;
+  };
+
   // ── Render ──────────────────────────────────────────────────────────────
   const hasKey = !!settings.apiKey;
 
@@ -477,6 +534,17 @@ export default function Dashboard() {
                     )}
                   </div>
                 )}
+
+                {/* Add to watchlist */}
+                <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                  {watching.find(w => w.ticker === sig.ticker) ? (
+                    <span style={{ fontSize: 9, color: C.greenText }}>✓ In Watchlist</span>
+                  ) : (
+                    <button onClick={() => quickAddWatch(sig.ticker)} style={{ ...btnSt, fontSize: 9, padding: "3px 10px", borderColor: C.blue + "50", color: C.blueText }}>
+                      + Add to Watchlist
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
 
@@ -535,6 +603,30 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
+                  {/* AI suggestion */}
+                  {(() => {
+                    const s = getHoldingSuggestion(h.ticker, pnlPct);
+                    if (!s) return (
+                      <div style={{ marginTop: 8, fontSize: 9, color: C.dim, fontStyle: "italic" }}>
+                        Run a full scan to get AI advice for this holding.
+                      </div>
+                    );
+                    const col = s.signal === "BUY" || s.signal === "STRONG_BUY" ? C.greenText
+                              : s.signal === "SELL" || s.signal === "AVOID" ? C.redText
+                              : s.signal === "HOLD" ? C.amberText : C.blueText;
+                    const bg  = s.signal === "BUY" || s.signal === "STRONG_BUY" ? C.greenDim
+                              : s.signal === "SELL" || s.signal === "AVOID" ? C.redDim
+                              : s.signal === "HOLD" ? C.amberDim : C.blueDim;
+                    return (
+                      <div style={{ marginTop: 8, background: bg, borderRadius: 6, padding: "6px 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: col, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
+                          {s.signal}
+                        </span>
+                        <span style={{ fontSize: 10, color: col, flex: 1 }}>{s.text}</span>
+                        <span style={{ fontSize: 8, color: C.dim, whiteSpace: "nowrap" }}>{s.source}</span>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -558,36 +650,87 @@ export default function Dashboard() {
         {/* ── WATCHLIST TAB ── */}
         {tab === "watching" && (
           <div>
-            <div style={{ ...s_label, marginBottom: 10 }}>Watchlist · KMI-30 / Shariah tickers</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <span style={s_label}>Watchlist · KMI-30 / Shariah tickers</span>
+              {watching.length > 0 && (
+                <button onClick={fetchWatchTech} disabled={loadingWatchTech} style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}>
+                  {loadingWatchTech ? "Loading…" : "↻ Load Signals"}
+                </button>
+              )}
+            </div>
             {watching.length === 0 && (
               <div style={{ color: C.dim, fontSize: 11, padding: "20px 0" }}>Add tickers below to track them.</div>
             )}
             {watching.map(w => {
               const p = prices[w.ticker];
               const sig = watchSignals[w.ticker];
+              const tech = watchTech[w.ticker];
+              const scanSig = scanResult?.signals.find(s => s.ticker === w.ticker);
               return (
                 <div key={w.ticker} style={{ ...cardStyle }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-                        <span style={{ fontSize: 14, fontWeight: 600 }}>{w.ticker}</span>
-                        {p && <span style={{ fontSize: 12 }}>PKR {p.currentPrice.toFixed(2)}</span>}
-                        {p?.changePercent !== undefined && (
-                          <span style={{ fontSize: 10, color: p.changePercent >= 0 ? C.greenText : C.redText }}>
-                            {p.changePercent >= 0 ? "+" : ""}{p.changePercent.toFixed(2)}%
-                          </span>
-                        )}
-                        {sig && <Pill signal={sig.signal} small />}
-                      </div>
-                      {sig && <div style={{ fontSize: 10, color: C.muted }}>{sig.reason}</div>}
-                      {sig?.newsHeadline && sig.newsHeadline !== "No recent news" && (
-                        <div style={{ fontSize: 9, color: C.dim, fontStyle: "italic" }}>📰 {sig.newsHeadline}</div>
+                  {/* Header row */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>{w.ticker}</span>
+                      {p && <span style={{ fontSize: 13, fontWeight: 500 }}>PKR {p.currentPrice.toFixed(2)}</span>}
+                      {p?.changePercent !== undefined && (
+                        <span style={{ fontSize: 10, color: p.changePercent >= 0 ? C.greenText : C.redText }}>
+                          {p.changePercent >= 0 ? "+" : ""}{p.changePercent.toFixed(2)}%
+                        </span>
                       )}
-                      {sig && <ConfBar pct={sig.confidence} signal={sig.signal} />}
+                      {/* Signal: from scan result if available, else from watchSignals */}
+                      {(scanSig || sig) && <Pill signal={(scanSig ?? sig)!.signal} small />}
                     </div>
                     <button onClick={() => setWatching(prev => prev.filter(x => x.ticker !== w.ticker))}
                       style={{ ...btnSt, padding: "0 5px", fontSize: 14, color: C.dim }}>×</button>
                   </div>
+
+                  {/* Technical indicators row */}
+                  {tech && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                      {[
+                        ["RSI", tech.rsi.toFixed(0), tech.rsi < 30 ? C.greenText : tech.rsi > 70 ? C.redText : C.muted],
+                        ["EMA20", tech.ema20.toFixed(2), C.muted],
+                        ["EMA50", tech.ema50.toFixed(2), C.muted],
+                        ["Vol", `${tech.volumeRatio.toFixed(1)}x avg`, tech.volumeRatio >= 1.5 ? C.greenText : C.muted],
+                        ["Score", `${tech.compositeScore}/100`, tech.compositeScore >= 60 ? C.greenText : tech.compositeScore >= 40 ? C.amberText : C.redText],
+                      ].map(([label, val, col]) => (
+                        <div key={label as string} style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 4, alignItems: "center" }}>
+                          <span style={{ fontSize: 8, color: C.dim }}>{label}</span>
+                          <span style={{ fontSize: 10, fontWeight: 500, color: col as string }}>{val}</span>
+                        </div>
+                      ))}
+                      <div style={{ background: "#111", borderRadius: 4, padding: "3px 7px" }}>
+                        <span style={{ fontSize: 9, color: tech.technicalSignal === "STRONG_BUY" || tech.technicalSignal === "BUY" ? C.greenText
+                          : tech.technicalSignal === "AVOID" ? C.redText : C.amberText }}>
+                          {tech.technicalSignal.replace("_", " ")}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Top reason from technicals */}
+                  {tech?.reasons?.[0] && (
+                    <div style={{ fontSize: 9, color: C.muted, marginBottom: 4 }}>▲ {tech.reasons[0]}</div>
+                  )}
+
+                  {/* AI signal from last scan if it covered this ticker */}
+                  {scanSig && (
+                    <>
+                      <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>{scanSig.reason}</div>
+                      {scanSig.newsHeadline && scanSig.newsHeadline !== "No recent news" && (
+                        <div style={{ fontSize: 9, color: C.dim, fontStyle: "italic" }}>📰 {scanSig.newsHeadline}</div>
+                      )}
+                      <ConfBar pct={scanSig.confidence} signal={scanSig.signal} />
+                    </>
+                  )}
+
+                  {/* Prompt to load signals if nothing loaded yet */}
+                  {!tech && !scanSig && (
+                    <div style={{ fontSize: 9, color: C.dim, fontStyle: "italic" }}>
+                      Click "↻ Load Signals" above to fetch EMA/RSI/volume data.
+                    </div>
+                  )}
                 </div>
               );
             })}

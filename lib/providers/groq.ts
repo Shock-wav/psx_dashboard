@@ -32,27 +32,29 @@ export async function getNewsAnalysis(
   const resp = await client.chat.completions.create({
     model: config.model ?? "llama-3.3-70b-versatile",
     max_tokens: 1000,
+    response_format: { type: "json_object" },
     messages: [
       {
+        role: "system",
+        content: "You are a Pakistan stock market analyst. Always respond with valid JSON only.",
+      },
+      {
         role: "user",
-        content: `You are a Pakistan stock market analyst. Based on the following news headlines fetched from Pakistani news sources today, identify macro conditions and which PSX sectors are affected.
+        content: `Based on the following news headlines from Pakistani news sources, identify macro conditions and which PSX sectors are affected. If no news is available, use general Pakistan market knowledge.
 
 NEWS HEADLINES:
 ${newsText}
 
-Return ONLY this JSON (no markdown, no preamble):
+Respond with this exact JSON structure:
 {
   "summary": "2-3 sentence macro overview of current Pakistan market conditions",
   "affectedSectors": [
-    { "sectorName": "Oil & Gas", "sectorCode": "0820", "impact": "NEGATIVE", "reason": "..." }
+    { "sectorName": "Oil & Gas", "sectorCode": "0820", "impact": "NEGATIVE", "reason": "brief reason" }
   ],
   "globalFactors": ["Oil -3%", "USD/PKR 278"]
 }
 
-Rules:
-- Only include sectors with clear, news-driven impact — max 5 sectors
-- impact: POSITIVE | NEGATIVE | NEUTRAL
-- sectorCode must be one of: 0801 0804 0805 0807 0808 0809 0810 0812 0819 0820 0821 0822 0823 0824 0825 0826 0828 0829`,
+Rules: max 5 sectors, impact must be POSITIVE/NEGATIVE/NEUTRAL, sectorCode from: 0801 0804 0805 0807 0808 0809 0810 0812 0819 0820 0821 0822 0823 0824 0825 0826 0828 0829`,
       },
     ],
   });
@@ -77,10 +79,15 @@ export async function getStockSignals(
   const resp = await client.chat.completions.create({
     model: config.model ?? "llama-3.3-70b-versatile",
     max_tokens: 2000,
+    response_format: { type: "json_object" },
     messages: [
       {
+        role: "system",
+        content: "You are a PSX Shariah-compliant swing trading analyst. Always respond with valid JSON only — a JSON object with a 'signals' array.",
+      },
+      {
         role: "user",
-        content: `You are a PSX Shariah-compliant swing trading analyst. Select the BEST 1-8 stocks for short-term swing trades (days to 2 weeks).
+        content: `Select the BEST 1-8 stocks for short-term swing trades (days to 2 weeks).
 
 MACRO CONTEXT (from today's Pakistan news):
 ${newsContext}
@@ -90,8 +97,8 @@ ${stockContext}
 
 Only recommend stocks where macro context supports the sector AND technicals confirm the setup.
 
-Return ONLY a JSON array (no markdown):
-[{
+Return a JSON object with a 'signals' array:
+{"signals": [{
   "ticker": "MEBL",
   "signal": "BUY",
   "confidence": 78,
@@ -100,12 +107,16 @@ Return ONLY a JSON array (no markdown):
   "catalysts": ["Rate cut reduces costs", "Volume 2.3x average", "RSI oversold"],
   "risks": ["Market weakness", "Rupee risk"],
   "suggestedEntry": "PKR 308-312"
-}]
+}]}
 signal: BUY | STRONG_BUY | WATCH | HOLD | SELL | AVOID`,
       },
     ],
   });
 
   const text = resp.choices[0]?.message?.content ?? "";
-  return extractJSON<AISignal[]>(text) ?? [];
+  // Unwrap { signals: [...] } wrapper from JSON-mode response
+  const parsed = extractJSON<{ signals?: AISignal[] } | AISignal[]>(text);
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && "signals" in parsed && Array.isArray(parsed.signals)) return parsed.signals;
+  return [];
 }
