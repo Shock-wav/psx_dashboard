@@ -11,16 +11,24 @@ import type { AISignal, NewsAnalysis, ProviderConfig } from "./types";
 const GROQ_BASE = "https://api.groq.com/openai/v1";
 
 function extractJSON<T>(text: string): T | null {
+  // Try direct parse first — works when API returns clean JSON (e.g. json_object mode)
+  try { return JSON.parse(text); } catch {}
+  // Extract from markdown code fence
   try {
-    const match =
-      text.match(/```json\s*([\s\S]*?)```/) ||
-      text.match(/(\[[\s\S]*\])/) ||
-      text.match(/(\{[\s\S]*\})/);
-    if (match) return JSON.parse(match[1]);
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) return JSON.parse(fence[1]);
+  } catch {}
+  // Find outermost JSON object (must come before array check to avoid greedy fragment matching)
+  try {
+    const obj = text.match(/\{[\s\S]*\}/);
+    if (obj) return JSON.parse(obj[0]);
+  } catch {}
+  // Find outermost JSON array
+  try {
+    const arr = text.match(/\[[\s\S]*\]/);
+    if (arr) return JSON.parse(arr[0]);
+  } catch {}
+  return null;
 }
 
 export async function getNewsAnalysis(
