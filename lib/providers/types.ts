@@ -25,7 +25,7 @@ export interface NewsAnalysis {
 }
 
 export interface ProviderConfig {
-  provider: "claude" | "gemini" | "openai";
+  provider: "claude" | "gemini" | "openai" | "groq";
   apiKey: string;
   model?: string;
 }
@@ -34,4 +34,5 @@ export const DEFAULT_MODELS: Record<string, string> = {
   claude: "claude-sonnet-4-5",
   gemini: "gemini-2.0-flash-lite",
   openai: "gpt-4o-mini",
+  groq: "llama-3.3-70b-versatile",
 };

@@ -3,19 +3,25 @@ import { useState, useEffect } from "react";
 import { DEFAULT_MODELS } from "@/lib/providers/types";
 
 export interface UserSettings {
-  provider: "claude" | "gemini" | "openai";
+  provider: "claude" | "gemini" | "openai" | "groq";
   apiKey: string;
   model: string;
   scanTime: string; // "09:00" PKT
 }
 
 const PROVIDER_LABELS = {
-  claude: { name: "Claude (Anthropic)", placeholder: "sk-ant-api03-...", keyUrl: "https://console.anthropic.com/settings/keys" },
+  groq:   { name: "Groq · Free (Llama 3.3)", placeholder: "gsk_...", keyUrl: "https://console.groq.com/keys" },
   gemini: { name: "Gemini (Google)", placeholder: "AIza...", keyUrl: "https://aistudio.google.com/apikey" },
+  claude: { name: "Claude (Anthropic)", placeholder: "sk-ant-api03-...", keyUrl: "https://console.anthropic.com/settings/keys" },
   openai: { name: "ChatGPT (OpenAI)", placeholder: "sk-proj-...", keyUrl: "https://platform.openai.com/api-keys" },
 };
 
 const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  groq: [
+    { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (recommended · free)" },
+    { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B (faster · free)" },
+    { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B (free)" },
+  ],
   claude: [
     { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5 (recommended)" },
     { value: "claude-haiku-4-5", label: "Claude Haiku 4.5 (faster, cheaper)" },
@@ -44,7 +50,7 @@ export function loadSettings(): UserSettings {
 }
 
 function defaultSettings(): UserSettings {
-  return { provider: "claude", apiKey: "", model: DEFAULT_MODELS.claude, scanTime: "09:00" };
+  return { provider: "groq", apiKey: "", model: DEFAULT_MODELS.groq, scanTime: "09:00" };
 }
 
 interface Props {
