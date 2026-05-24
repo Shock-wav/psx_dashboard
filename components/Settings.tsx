@@ -10,7 +10,7 @@ export interface UserSettings {
 }
 
 const PROVIDER_LABELS = {
-  claude: { name: "Claude (Anthropic)", placeholder: "sk-ant-api03-...", keyUrl: "https://console.anthropic.com/keys" },
+  claude: { name: "Claude (Anthropic)", placeholder: "sk-ant-api03-...", keyUrl: "https://console.anthropic.com/settings/keys" },
   gemini: { name: "Gemini (Google)", placeholder: "AIza...", keyUrl: "https://aistudio.google.com/apikey" },
   openai: { name: "ChatGPT (OpenAI)", placeholder: "sk-proj-...", keyUrl: "https://platform.openai.com/api-keys" },
 };
