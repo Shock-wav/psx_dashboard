@@ -165,7 +165,10 @@ export default function Dashboard() {
     setLoadingPrices(false);
   }, [allTickers.join(",")]); // eslint-disable-line
 
-  useEffect(() => { fetchPrices(); const id = setInterval(fetchPrices, 60000); return () => clearInterval(id); }, []); // eslint-disable-line
+  // Fetch on mount, and whenever the ticker list changes (new holding / watch item added)
+  useEffect(() => { fetchPrices(); }, [fetchPrices]); // eslint-disable-line
+  // Refresh prices every 60s
+  useEffect(() => { const id = setInterval(fetchPrices, 60000); return () => clearInterval(id); }, []); // eslint-disable-line
 
   // ── Full scanner ────────────────────────────────────────────────────────
   const runFullScan = async () => {
@@ -230,7 +233,8 @@ export default function Dashboard() {
   };
   const addWatch = () => {
     if (!newWatch.trim()) return;
-    const t = newWatch.toUpperCase().trim();
+    const t = newWatch.toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
+    if (!t) return;
     if (!watching.find(w => w.ticker === t)) setWatching(prev => [...prev, { ticker: t, name: t }]);
     setNewWatch("");
   };
@@ -470,8 +474,8 @@ export default function Dashboard() {
             })}
             <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
               <input style={{ ...inputSt, width: 60 }} placeholder="Ticker" value={newHolding.ticker} onChange={e => setNewHolding(p => ({ ...p, ticker: e.target.value }))} onKeyDown={e => e.key === "Enter" && addHolding()} />
-              <input style={{ ...inputSt, width: 70 }} placeholder="Shares" type="number" value={newHolding.shares} onChange={e => setNewHolding(p => ({ ...p, shares: e.target.value }))} />
-              <input style={{ ...inputSt, width: 70 }} placeholder="Avg PKR" type="number" value={newHolding.avg} onChange={e => setNewHolding(p => ({ ...p, avg: e.target.value }))} />
+              <input style={{ ...inputSt, width: 70 }} placeholder="Shares" type="text" inputMode="numeric" value={newHolding.shares} onChange={e => setNewHolding(p => ({ ...p, shares: e.target.value.replace(/[^0-9.]/g, "") }))} />
+              <input style={{ ...inputSt, width: 70 }} placeholder="Avg PKR" type="text" inputMode="numeric" value={newHolding.avg} onChange={e => setNewHolding(p => ({ ...p, avg: e.target.value.replace(/[^0-9.]/g, "") }))} />
               <button onClick={addHolding} style={btnSt}>Add</button>
             </div>
           </div>

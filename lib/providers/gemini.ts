@@ -16,7 +16,7 @@ function extractJSON<T>(text: string): T | null {
 
 /**
  * Pass 1: Reason over pre-fetched Pakistan news headlines.
- * Uses gemini-1.5-flash by default — free tier (15 RPM, 1M tokens/day).
+ * Uses gemini-2.0-flash-lite by default — free tier (15 RPM, 1M tokens/day).
  * No Google Search grounding = no paid quota consumed.
  */
 export async function getNewsAnalysis(
@@ -25,7 +25,7 @@ export async function getNewsAnalysis(
 ): Promise<NewsAnalysis> {
   const genai = new GoogleGenerativeAI(config.apiKey);
   const model = genai.getGenerativeModel({
-    model: config.model ?? "gemini-1.5-flash",
+    model: config.model ?? "gemini-2.0-flash-lite",
     // No tools = no paid Google Search grounding
   });
 
@@ -67,7 +67,7 @@ export async function getStockSignals(
 ): Promise<AISignal[]> {
   const genai = new GoogleGenerativeAI(config.apiKey);
   const model = genai.getGenerativeModel({
-    model: config.model ?? "gemini-1.5-flash",
+    model: config.model ?? "gemini-2.0-flash-lite",
   });
 
   const prompt = `You are a PSX Shariah-compliant swing trading analyst. Select the BEST 1-8 stocks for short-term swing trades (days to 2 weeks).

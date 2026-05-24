@@ -22,9 +22,9 @@ const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
     { value: "claude-opus-4-5", label: "Claude Opus 4.5 (most powerful)" },
   ],
   gemini: [
-    { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash (free tier, recommended)" },
-    { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro (free tier, slower)" },
-    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash (paid billing required)" },
+    { value: "gemini-2.0-flash-lite", label: "Gemini 2.0 Flash Lite (free tier, recommended)" },
+    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash (faster, small cost)" },
+    { value: "gemini-2.5-flash-preview-05-20", label: "Gemini 2.5 Flash Preview (newest)" },
   ],
   openai: [
     { value: "gpt-4o-mini", label: "GPT-4o Mini (recommended)" },
