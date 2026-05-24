@@ -1,14 +1,12 @@
-import { GoogleGenerativeAI, type Tool } from "@google/generative-ai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { AISignal, NewsAnalysis, ProviderConfig } from "./types";
-
-// Google Search grounding tool (type varies across SDK versions)
-const GOOGLE_SEARCH_TOOL = { googleSearch: {} } as unknown as Tool;
 
 function extractJSON<T>(text: string): T | null {
   try {
-    const match = text.match(/```json\s*([\s\S]*?)```/) ||
-                  text.match(/(\[[\s\S]*\])/) ||
-                  text.match(/(\{[\s\S]*\})/);
+    const match =
+      text.match(/```json\s*([\s\S]*?)```/) ||
+      text.match(/(\[[\s\S]*\])/) ||
+      text.match(/(\{[\s\S]*\})/);
     if (match) return JSON.parse(match[1]);
     return JSON.parse(text);
   } catch {
@@ -16,41 +14,52 @@ function extractJSON<T>(text: string): T | null {
   }
 }
 
+/**
+ * Pass 1: Reason over pre-fetched Pakistan news headlines.
+ * Uses gemini-1.5-flash by default — free tier (15 RPM, 1M tokens/day).
+ * No Google Search grounding = no paid quota consumed.
+ */
 export async function getNewsAnalysis(
-  config: ProviderConfig
+  config: ProviderConfig,
+  newsText: string
 ): Promise<NewsAnalysis> {
   const genai = new GoogleGenerativeAI(config.apiKey);
   const model = genai.getGenerativeModel({
-    model: config.model ?? "gemini-2.0-flash",
-    tools: [GOOGLE_SEARCH_TOOL],
+    model: config.model ?? "gemini-1.5-flash",
+    // No tools = no paid Google Search grounding
   });
 
-  const prompt = `You are a Pakistan stock market analyst. Search for:
-1. Latest Pakistan economic news (SBP rates, inflation, IMF, PMEX, rupee)
-2. Global news affecting Pakistan stocks (oil prices, US tensions, Fed rates)
-3. PSX sector news today
+  const prompt = `You are a Pakistan stock market analyst. Based on the following news headlines fetched from Pakistani news sources today, identify macro conditions and which PSX sectors are affected.
 
-Return ONLY this JSON (no markdown):
+NEWS HEADLINES:
+${newsText}
+
+Return ONLY this JSON (no markdown, no preamble):
 {
-  "summary": "2-3 sentence macro overview",
+  "summary": "2-3 sentence macro overview of current Pakistan market conditions",
   "affectedSectors": [
     { "sectorName": "Oil & Gas", "sectorCode": "0820", "impact": "NEGATIVE", "reason": "..." }
   ],
   "globalFactors": ["Oil -3%", "USD/PKR 278"]
 }
-Max 5 sectors. sectorCode: 0801 0804 0805 0807 0808 0809 0810 0812 0820 0821 0823 0824 0825 0826 0828 0829`;
+
+Rules:
+- Only include sectors with clear, news-driven impact — max 5 sectors
+- impact: POSITIVE | NEGATIVE | NEUTRAL
+- sectorCode must be one of: 0801 0804 0805 0807 0808 0809 0810 0812 0819 0820 0821 0822 0823 0824 0825 0826 0828 0829`;
 
   const result = await model.generateContent(prompt);
   const text = result.response.text();
   return (
     extractJSON<NewsAnalysis>(text) ?? {
-      summary: "Unable to fetch news via Gemini.",
+      summary: "Unable to analyze news via Gemini.",
       affectedSectors: [],
       globalFactors: [],
     }
   );
 }
 
+/** Pass 2: AI reasons over provided technical data + news context. */
 export async function getStockSignals(
   config: ProviderConfig,
   stockContext: string,
@@ -58,20 +67,18 @@ export async function getStockSignals(
 ): Promise<AISignal[]> {
   const genai = new GoogleGenerativeAI(config.apiKey);
   const model = genai.getGenerativeModel({
-    model: config.model ?? "gemini-2.0-flash",
-    tools: [GOOGLE_SEARCH_TOOL],
+    model: config.model ?? "gemini-1.5-flash",
   });
 
-  const prompt = `You are a PSX Shariah-compliant swing trading analyst.
+  const prompt = `You are a PSX Shariah-compliant swing trading analyst. Select the BEST 1-8 stocks for short-term swing trades (days to 2 weeks).
 
-MACRO CONTEXT:
+MACRO CONTEXT (from today's Pakistan news):
 ${newsContext}
 
-TECHNICALLY FILTERED STOCKS:
+TECHNICALLY FILTERED STOCKS (passed RSI/EMA/volume screening):
 ${stockContext}
 
-Search for latest company news for the top candidates.
-Select the BEST 1-8 stocks for short-term swing trades (days to 2 weeks).
+Only recommend stocks where macro context supports the sector AND technicals confirm the setup.
 
 Return ONLY a JSON array (no markdown):
 [{

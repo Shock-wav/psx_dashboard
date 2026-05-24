@@ -1,16 +1,17 @@
 /**
  * Autonomous Two-Pass Scanner
  *
- * Pass 1 — News analysis:
- *   AI searches for Pakistan macro + global news.
- *   Returns which PSX sectors are affected and why.
+ * Pass 1 — Free news fetch + AI reasoning:
+ *   RSS feeds from Dawn, Geo, Profit Pakistan are fetched for free.
+ *   AI reasons over the headlines to identify which PSX sectors are affected.
+ *   No web search tools → no paid quota consumed.
  *
  * Pass 2 — Stock selection:
- *   Always scans KMI-30 (30 stocks).
+ *   Always scans KMI-30 (30 Shariah-compliant stocks).
  *   For each news-flagged sector, expands to ALL Shariah-compliant stocks in that sector.
- *   Runs technical scoring on everything.
+ *   Runs technical scoring (RSI, EMA, volume) on all candidates.
  *   Filters out weak setups (score < minScore).
- *   AI reasons over survivors and returns final 1-8 picks.
+ *   AI reasons over survivors → returns final 1-8 picks.
  */
 
 import {
@@ -29,6 +30,7 @@ import {
   type NewsAnalysis,
   type ProviderConfig,
 } from "./providers";
+import { fetchPakistanNews } from "./news-fetcher";
 
 export interface ScanResult {
   timestamp: string;            // ISO string
@@ -125,7 +127,7 @@ export async function runFullScan(
     skipNewsPass = false,
   } = options;
 
-  // --- Pass 1: News analysis ---
+  // --- Pass 1: Free RSS news fetch → AI sector analysis ---
   let newsAnalysis: NewsAnalysis = {
     summary: "News scan skipped.",
     affectedSectors: [],
@@ -133,7 +135,10 @@ export async function runFullScan(
   };
 
   if (!skipNewsPass) {
-    newsAnalysis = await getNewsAnalysis(providerConfig);
+    // Fetch Pakistan news from free RSS feeds (Dawn, Geo, Profit Pakistan)
+    const rawNews = await fetchPakistanNews();
+    // AI reasons over headlines — no web search needed
+    newsAnalysis = await getNewsAnalysis(providerConfig, rawNews);
   }
 
   // Determine sector expansion
@@ -193,11 +198,7 @@ export async function runFullScan(
 
   let signals: AISignal[] = [];
   if (scoredStocks.length > 0) {
-    signals = await getStockSignals(
-      providerConfig,
-      stockContext,
-      newsContext
-    );
+    signals = await getStockSignals(providerConfig, stockContext, newsContext);
     // Cap at maxPicks and sort by confidence
     signals = signals
       .sort((a, b) => b.confidence - a.confidence)
@@ -219,5 +220,6 @@ export async function runFullScan(
 export async function runNewsRefresh(
   providerConfig: ProviderConfig
 ): Promise<NewsAnalysis> {
-  return getNewsAnalysis(providerConfig);
+  const rawNews = await fetchPakistanNews();
+  return getNewsAnalysis(providerConfig, rawNews);
 }
