@@ -35,19 +35,50 @@ function Pill({ signal, small }: { signal?: string; small?: boolean }) {
   );
 }
 
-function ConfBar({ pct, signal }: { pct: number; signal?: string }) {
+function ConfBar({ pct, signal, label }: { pct: number; signal?: string; label?: string }) {
   const col = signal === "BUY" || signal === "STRONG_BUY" ? C.green
             : signal === "SELL" || signal === "AVOID" ? C.red
             : signal === "HOLD" ? C.amber : C.blue;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-      <span style={{ fontSize: 9, color: C.dim, whiteSpace: "nowrap" }}>AI confidence</span>
+      <span style={{ fontSize: 9, color: C.dim, whiteSpace: "nowrap" }}>{label ?? "AI confidence"}</span>
       <div style={{ flex: 1, height: 2, background: C.border2, borderRadius: 2 }}>
         <div style={{ width: `${pct}%`, height: 2, background: col, borderRadius: 2, transition: "width 0.6s ease" }} />
       </div>
       <span style={{ fontSize: 9, color: C.muted, minWidth: 28, textAlign: "right" }}>{pct}%</span>
     </div>
   );
+}
+
+// ─── Derive catalysts & risks from raw technical data ──────────────────────
+interface StockTechLocal {
+  symbol: string; compositeScore: number; technicalSignal: string;
+  rsi: number; ema20: number; ema50: number; volumeRatio: number;
+  crossoverSignal: string; priceVsEma20: string; reasons: string[];
+}
+function techCatalysts(t: StockTechLocal): string[] {
+  const out: string[] = [];
+  if (t.rsi < 35)       out.push(`RSI ${t.rsi.toFixed(0)} — oversold, potential bounce`);
+  else if (t.rsi <= 60) out.push(`RSI ${t.rsi.toFixed(0)} — neutral, room to run`);
+  else                  out.push(`RSI ${t.rsi.toFixed(0)} — strong upward momentum`);
+  if (t.ema20 > t.ema50)       out.push("EMA20 above EMA50 — uptrend confirmed");
+  if (t.volumeRatio >= 1.5)    out.push(`Volume ${t.volumeRatio.toFixed(1)}x above average`);
+  else if (t.volumeRatio >= 1) out.push(`Volume at ${t.volumeRatio.toFixed(1)}x average`);
+  for (const r of t.reasons) {
+    const already = out.some(o => o.slice(0, 12).toLowerCase() === r.slice(0, 12).toLowerCase());
+    if (!already) { out.push(r); if (out.length >= 4) break; }
+  }
+  return out.slice(0, 3);
+}
+function techRisks(t: StockTechLocal): string[] {
+  const out: string[] = [];
+  if (t.rsi > 68) out.push(`RSI ${t.rsi.toFixed(0)} — approaching overbought`);
+  if (t.volumeRatio < 0.8) out.push(`Volume ${t.volumeRatio.toFixed(1)}x avg — weak conviction`);
+  if (t.ema20 < t.ema50)   out.push("EMA20 below EMA50 — bearish crossover");
+  if (t.compositeScore < 55) out.push("Moderate technical score — watch closely");
+  if (out.length === 0) out.push("General market volatility");
+  out.push("Always verify with fundamentals");
+  return out.slice(0, 3);
 }
 
 // ─── PKT clock ─────────────────────────────────────────────────────────────
@@ -77,19 +108,8 @@ function PKTClock() {
   );
 }
 
-// ─── Technical data (from /api/technicals) ─────────────────────────────────
-interface StockTech {
-  symbol: string;
-  compositeScore: number;
-  technicalSignal: string;
-  rsi: number;
-  ema20: number;
-  ema50: number;
-  volumeRatio: number;
-  crossoverSignal: string;
-  priceVsEma20: string;
-  reasons: string[];
-}
+// StockTech alias (matches StockTechLocal defined above near ConfBar)
+type StockTech = StockTechLocal;
 
 // ─── Holdings ──────────────────────────────────────────────────────────────
 interface Holding { ticker: string; name: string; shares: number; avgPrice: number; shariah: boolean; }
@@ -158,6 +178,9 @@ export default function Dashboard() {
   const [watchError, setWatchError] = useState("");
   const [addingHolding, setAddingHolding] = useState(false);
   const [addingWatch, setAddingWatch] = useState(false);
+  // Two-step delete confirmations
+  const [pendingDeleteHolding, setPendingDeleteHolding] = useState<string | null>(null);
+  const [pendingDeleteWatch, setPendingDeleteWatch] = useState<string | null>(null);
 
   // ── Price fetching ──────────────────────────────────────────────────────
   const allTickers = [...new Set([
@@ -584,8 +607,22 @@ export default function Dashboard() {
                           {p.changePercent >= 0 ? "+" : ""}{p.changePercent.toFixed(2)}%
                         </span>
                       )}
-                      <button onClick={() => setHoldings(prev => prev.filter(x => x.ticker !== h.ticker))}
-                        style={{ ...btnSt, padding: "0 5px", fontSize: 14, color: C.dim }}>×</button>
+                      {pendingDeleteHolding === h.ticker ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <button
+                            onClick={() => { setHoldings(prev => prev.filter(x => x.ticker !== h.ticker)); setPendingDeleteHolding(null); }}
+                            style={{ ...btnSt, fontSize: 9, padding: "2px 9px", borderColor: C.red + "99", color: C.redText, fontWeight: 600 }}>
+                            Remove
+                          </button>
+                          <button onClick={() => setPendingDeleteHolding(null)}
+                            style={{ ...btnSt, fontSize: 9, padding: "2px 9px" }}>
+                            Keep
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setPendingDeleteHolding(h.ticker)}
+                          style={{ ...btnSt, padding: "0 6px", fontSize: 15, color: C.dim }}>×</button>
+                      )}
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
@@ -666,18 +703,31 @@ export default function Dashboard() {
               const sig = watchSignals[w.ticker];
               const tech = watchTech[w.ticker];
               const scanSig = scanResult?.signals.find(s => s.ticker === w.ticker);
-              // Active AI signal: scan result takes priority over watchSignals
+              // AI signal from scan takes priority; fall back to watchSignals
               const activeSig = scanSig ?? sig;
+
+              // When no AI signal, synthesise display data from tech indicators
+              const displayReason   = activeSig ? activeSig.reason
+                                    : tech       ? (tech.reasons[0] ?? "Technical analysis")
+                                    : null;
+              const displayCats     = activeSig?.catalysts?.length ? activeSig.catalysts
+                                    : tech ? techCatalysts(tech) : [];
+              const displayRisks    = activeSig?.risks?.length ? activeSig.risks
+                                    : tech ? techRisks(tech) : [];
+              const displayConfPct  = activeSig ? activeSig.confidence
+                                    : tech ? tech.compositeScore : null;
+              const displaySignal   = activeSig ? activeSig.signal
+                                    : tech ? tech.technicalSignal : null;
+              const confLabel       = activeSig ? "AI confidence" : "Technical score";
+              const hasContent      = displayReason !== null;
+
               return (
                 <div key={w.ticker} style={{ ...cardStyle }}>
-                  {/* ── Header: ticker · price · change · signal pill · × ── */}
+                  {/* ── Header ── */}
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 6 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 15, fontWeight: 600 }}>{w.ticker}</span>
-                      {/* Signal pill: AI signal > technical signal */}
-                      {activeSig
-                        ? <Pill signal={activeSig.signal} />
-                        : tech && <Pill signal={tech.technicalSignal} />}
+                      {displaySignal && <Pill signal={displaySignal} />}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       {p && (
@@ -690,35 +740,52 @@ export default function Dashboard() {
                           )}
                         </div>
                       )}
-                      <button onClick={() => setWatching(prev => prev.filter(x => x.ticker !== w.ticker))}
-                        style={{ ...btnSt, padding: "0 5px", fontSize: 14, color: C.dim }}>×</button>
+                      {/* Two-step delete */}
+                      {pendingDeleteWatch === w.ticker ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <button
+                            onClick={() => { setWatching(prev => prev.filter(x => x.ticker !== w.ticker)); setPendingDeleteWatch(null); }}
+                            style={{ ...btnSt, fontSize: 9, padding: "2px 9px", borderColor: C.red + "99", color: C.redText, fontWeight: 600 }}>
+                            Remove
+                          </button>
+                          <button onClick={() => setPendingDeleteWatch(null)}
+                            style={{ ...btnSt, fontSize: 9, padding: "2px 9px" }}>
+                            Keep
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setPendingDeleteWatch(w.ticker)}
+                          style={{ ...btnSt, padding: "0 6px", fontSize: 15, color: C.dim }}>×</button>
+                      )}
                     </div>
                   </div>
 
-                  {/* ── AI signal section (same layout as Buy Opportunities) ── */}
-                  {activeSig && (
+                  {/* ── Signal body (AI or synthesised from tech) ── */}
+                  {hasContent && (
                     <>
-                      <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{activeSig.reason}</div>
-                      {activeSig.newsHeadline && activeSig.newsHeadline !== "No recent news" && (
+                      <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{displayReason}</div>
+                      {activeSig?.newsHeadline && activeSig.newsHeadline !== "No recent news" && (
                         <div style={{ fontSize: 10, color: C.dim, marginBottom: 6, fontStyle: "italic" }}>
                           📰 {activeSig.newsHeadline}
                         </div>
                       )}
-                      <ConfBar pct={activeSig.confidence} signal={activeSig.signal} />
-                      {(activeSig.catalysts?.length > 0 || activeSig.risks?.length > 0) && (
+                      {displayConfPct !== null && (
+                        <ConfBar pct={displayConfPct} signal={displaySignal ?? undefined} label={confLabel} />
+                      )}
+                      {(displayCats.length > 0 || displayRisks.length > 0) && (
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-                          {activeSig.catalysts?.length > 0 && (
+                          {displayCats.length > 0 && (
                             <div>
                               <div style={{ fontSize: 9, color: C.greenText, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.4 }}>Catalysts</div>
-                              {activeSig.catalysts.map((c, j) => (
+                              {displayCats.map((c, j) => (
                                 <div key={j} style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>▲ {c}</div>
                               ))}
                             </div>
                           )}
-                          {activeSig.risks?.length > 0 && (
+                          {displayRisks.length > 0 && (
                             <div>
                               <div style={{ fontSize: 9, color: C.redText, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.4 }}>Risks</div>
-                              {activeSig.risks.map((r, j) => (
+                              {displayRisks.map((r, j) => (
                                 <div key={j} style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>▼ {r}</div>
                               ))}
                             </div>
@@ -728,9 +795,9 @@ export default function Dashboard() {
                     </>
                   )}
 
-                  {/* ── Technical indicators row — always at the bottom ── */}
+                  {/* ── Technical indicators row — always at the bottom when loaded ── */}
                   {tech && (
-                    <div style={{ marginTop: activeSig ? 12 : 0, paddingTop: activeSig ? 10 : 0, borderTop: activeSig ? `0.5px solid ${C.border}` : "none" }}>
+                    <div style={{ marginTop: hasContent ? 12 : 0, paddingTop: hasContent ? 10 : 0, borderTop: hasContent ? `0.5px solid ${C.border}` : "none" }}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {([
                           ["RSI", tech.rsi.toFixed(0), tech.rsi < 30 ? C.greenText : tech.rsi > 70 ? C.redText : C.muted],
@@ -738,21 +805,17 @@ export default function Dashboard() {
                           ["EMA50", tech.ema50.toFixed(2), C.muted],
                           ["Vol", `${tech.volumeRatio.toFixed(1)}x avg`, tech.volumeRatio >= 1.5 ? C.greenText : C.muted],
                           ["Score", `${tech.compositeScore}/100`, tech.compositeScore >= 60 ? C.greenText : tech.compositeScore >= 40 ? C.amberText : C.redText],
-                        ] as [string, string, string][]).map(([label, val, col]) => (
-                          <div key={label} style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 4, alignItems: "center" }}>
-                            <span style={{ fontSize: 8, color: C.dim }}>{label}</span>
+                        ] as [string, string, string][]).map(([lbl, val, col]) => (
+                          <div key={lbl} style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 4, alignItems: "center" }}>
+                            <span style={{ fontSize: 8, color: C.dim }}>{lbl}</span>
                             <span style={{ fontSize: 10, fontWeight: 500, color: col }}>{val}</span>
                           </div>
                         ))}
                       </div>
-                      {/* Top technical reason — shown only when no AI signal */}
-                      {!activeSig && tech.reasons?.[0] && (
-                        <div style={{ fontSize: 9, color: C.muted, marginTop: 5 }}>▲ {tech.reasons[0]}</div>
-                      )}
                     </div>
                   )}
 
-                  {/* ── Prompt when no data loaded yet ── */}
+                  {/* ── Prompt when nothing loaded yet ── */}
                   {!tech && !activeSig && (
                     <div style={{ fontSize: 9, color: C.dim, fontStyle: "italic" }}>
                       Click "↻ Load Signals" above to fetch EMA / RSI / volume data.
