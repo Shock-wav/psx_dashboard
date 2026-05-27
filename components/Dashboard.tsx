@@ -154,17 +154,25 @@ export default function Dashboard() {
     totalScanned: number;
     passedTechnicals: number;
     timestamp: string;
+    technicalData: StockTech[];  // full scored list from scanner
   } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
-  const [scanPhase, setScanPhase] = useState(""); // for status display
+  const [scanPhase, setScanPhase] = useState("");
 
-  // Watch signals (separate lightweight scan)
+  // Watchlist signals (from dedicated /api/watchscan call)
   const [watchSignals, setWatchSignals] = useState<Record<string, AISignal>>({});
-  const [loadingWatchAI, setLoadingWatchAI] = useState(false);
-  // Watchlist technical data (from /api/technicals)
+  const [runningWatchAI, setRunningWatchAI] = useState(false);
+  const [watchAIError, setWatchAIError] = useState("");
+  // Watchlist + holding technical data (from /api/technicals)
   const [watchTech, setWatchTech] = useState<Record<string, StockTech>>({});
+  const [holdingTech, setHoldingTech] = useState<Record<string, StockTech>>({});
   const [loadingWatchTech, setLoadingWatchTech] = useState(false);
+
+  // Sort states
+  const SIGNAL_RANK: Record<string, number> = { STRONG_BUY: 0, BUY: 1, WATCH: 2, HOLD: 3, NEUTRAL: 4, SELL: 5, AVOID: 6 };
+  const [sortOpps, setSortOpps] = useState<"confidence" | "signal" | "name">("confidence");
+  const [sortWatch, setSortWatch] = useState<"signal" | "score" | "name">("signal");
 
   // Settings
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
@@ -244,6 +252,7 @@ export default function Dashboard() {
         totalScanned: data.totalScanned ?? 0,
         passedTechnicals: data.passedTechnicals ?? 0,
         timestamp: data.timestamp,
+        technicalData: data.technicalData ?? [],
       });
     } catch (e) {
       setScanError(e instanceof Error ? e.message : "Unknown error");
@@ -369,11 +378,99 @@ export default function Dashboard() {
     setLoadingWatchTech(false);
   };
 
+  // ── Fetch technicals for all holdings ──────────────────────────────────
+  const fetchHoldingTech = useCallback(async () => {
+    if (!holdings.length) return;
+    const results: Record<string, StockTech> = {};
+    await Promise.allSettled(
+      holdings.map(async (h) => {
+        try {
+          const res = await fetch(`/api/technicals?symbol=${h.ticker}`);
+          if (res.ok) results[h.ticker] = await res.json();
+        } catch { /* ignore */ }
+      })
+    );
+    setHoldingTech(prev => ({ ...prev, ...results }));
+  }, [holdings]); // eslint-disable-line
+
+  // Auto-fetch holding tech when Holdings tab is opened
+  const prevTabRef = useRef<string>("");
+  useEffect(() => {
+    if (tab === "holdings" && prevTabRef.current !== "holdings") {
+      fetchHoldingTech();
+    }
+    prevTabRef.current = tab;
+  }, [tab]); // eslint-disable-line
+
+  // ── Watchlist AI analysis (runs same two-pass pipeline on watchlist tickers) ──
+  const runWatchlistAI = async () => {
+    if (!watching.length) { return; }
+    if (!settings.apiKey) { setShowSettings(true); return; }
+    setRunningWatchAI(true); setWatchAIError("");
+    try {
+      const res = await fetch("/api/watchscan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tickers: watching.map(w => w.ticker),
+          provider: settings.provider,
+          apiKey: settings.apiKey,
+          model: settings.model,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const raw = data.error ?? "Watchlist AI scan failed";
+        if (raw.includes("quota") || raw.includes("429")) throw new Error("API quota exceeded — check your provider.");
+        if (raw.includes("401") || raw.includes("403") || raw.includes("API key")) throw new Error("Invalid API key — check Settings.");
+        throw new Error(raw.length > 200 ? raw.slice(0, 200) + "…" : raw);
+      }
+      // Merge new AI signals into watchSignals
+      const newSigs: Record<string, AISignal> = {};
+      for (const sig of (data.signals ?? [])) newSigs[sig.ticker] = sig;
+      setWatchSignals(prev => ({ ...prev, ...newSigs }));
+      // Merge tech data into watchTech
+      const newTech: Record<string, StockTech> = {};
+      for (const t of (data.technicalData ?? [])) newTech[t.symbol] = t;
+      setWatchTech(prev => ({ ...prev, ...newTech }));
+    } catch (e) {
+      setWatchAIError(e instanceof Error ? e.message : "AI analysis failed");
+    } finally {
+      setRunningWatchAI(false);
+    }
+  };
+
+  // ── Sort helpers ────────────────────────────────────────────────────────
+  const sortedOpps = (sigs: AISignal[]) => {
+    const arr = [...sigs];
+    if (sortOpps === "signal") return arr.sort((a, b) => (SIGNAL_RANK[a.signal] ?? 9) - (SIGNAL_RANK[b.signal] ?? 9));
+    if (sortOpps === "name")   return arr.sort((a, b) => a.ticker.localeCompare(b.ticker));
+    return arr; // "confidence" — scanner already sorted by confidence desc
+  };
+
+  const sortedWatch = (items: typeof watching) => {
+    const arr = [...items];
+    if (sortWatch === "name") return arr.sort((a, b) => a.ticker.localeCompare(b.ticker));
+    if (sortWatch === "score") {
+      return arr.sort((a, b) => {
+        const sa = watchTech[a.ticker]?.compositeScore ?? -1;
+        const sb = watchTech[b.ticker]?.compositeScore ?? -1;
+        return sb - sa;
+      });
+    }
+    // "signal" — STRONG_BUY first, unlabeled last
+    return arr.sort((a, b) => {
+      const sigA = scanResult?.signals.find(s => s.ticker === a.ticker)?.signal ?? watchSignals[a.ticker]?.signal ?? watchTech[a.ticker]?.technicalSignal ?? "ZZZ";
+      const sigB = scanResult?.signals.find(s => s.ticker === b.ticker)?.signal ?? watchSignals[b.ticker]?.signal ?? watchTech[b.ticker]?.technicalSignal ?? "ZZZ";
+      return (SIGNAL_RANK[sigA] ?? 9) - (SIGNAL_RANK[sigB] ?? 9);
+    });
+  };
+
   // ── Holding suggestion from scan data or P&L ────────────────────────────
   const getHoldingSuggestion = (ticker: string, pnlPct: number | null) => {
     const aiSig = scanResult?.signals.find(s => s.ticker === ticker);
     if (aiSig) return { signal: aiSig.signal, text: aiSig.reason, source: "AI scan" };
-    const tech = watchTech[ticker] as StockTech | undefined;
+    const tech = holdingTech[ticker] ?? watchTech[ticker];
     if (tech) return { signal: tech.technicalSignal, text: tech.reasons[0] ?? "Based on technicals", source: "Technicals" };
     if (pnlPct !== null) {
       if (pnlPct >= 20) return { signal: "HOLD", text: "Up 20%+ — consider booking partial profits", source: "P&L" };
@@ -510,66 +607,119 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Signal cards */}
-            {scanResult?.signals.map((sig, i) => (
-              <div key={sig.ticker} style={{ ...cardStyle }}>
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 6 }}>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-                      <span style={{ fontSize: 15, fontWeight: 600 }}>{sig.ticker}</span>
-                      <Pill signal={sig.signal} />
-                      <span style={{ fontSize: 10, color: C.dim }}>#{i + 1}</span>
-                    </div>
-                    <div style={{ fontSize: 11, color: C.muted }}>{sig.reason}</div>
-                  </div>
-                  {sig.suggestedEntry && (
-                    <span style={{ fontSize: 10, color: C.amberText, background: C.amberDim, padding: "2px 8px", borderRadius: 6, whiteSpace: "nowrap", marginLeft: 8 }}>
-                      Entry: {sig.suggestedEntry}
-                    </span>
-                  )}
-                </div>
-
-                {sig.newsHeadline && sig.newsHeadline !== "No recent news" && (
-                  <div style={{ fontSize: 10, color: C.dim, marginBottom: 6, fontStyle: "italic" }}>
-                    📰 {sig.newsHeadline}
-                  </div>
-                )}
-
-                <ConfBar pct={sig.confidence} signal={sig.signal} />
-
-                {(sig.catalysts?.length > 0 || sig.risks?.length > 0) && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-                    {sig.catalysts?.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: 9, color: C.greenText, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.4 }}>Catalysts</div>
-                        {sig.catalysts.map((c, j) => (
-                          <div key={j} style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>▲ {c}</div>
-                        ))}
-                      </div>
-                    )}
-                    {sig.risks?.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: 9, color: C.redText, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.4 }}>Risks</div>
-                        {sig.risks.map((r, j) => (
-                          <div key={j} style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>▼ {r}</div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Add to watchlist */}
-                <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-                  {watching.find(w => w.ticker === sig.ticker) ? (
-                    <span style={{ fontSize: 9, color: C.greenText }}>✓ In Watchlist</span>
-                  ) : (
-                    <button onClick={() => quickAddWatch(sig.ticker)} style={{ ...btnSt, fontSize: 9, padding: "3px 10px", borderColor: C.blue + "50", color: C.blueText }}>
-                      + Add to Watchlist
-                    </button>
-                  )}
-                </div>
+            {/* Sort control */}
+            {scanResult && scanResult.signals.length > 1 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                <span style={{ fontSize: 9, color: C.dim }}>Sort:</span>
+                {(["confidence", "signal", "name"] as const).map(opt => (
+                  <button key={opt} onClick={() => setSortOpps(opt)} style={{
+                    ...btnSt, fontSize: 9, padding: "2px 9px",
+                    background: sortOpps === opt ? C.border2 : "transparent",
+                    color: sortOpps === opt ? C.text : C.muted,
+                  }}>
+                    {opt === "confidence" ? "Confidence" : opt === "signal" ? "Signal strength" : "Name A–Z"}
+                  </button>
+                ))}
               </div>
-            ))}
+            )}
+
+            {/* Signal cards */}
+            {scanResult && sortedOpps(scanResult.signals).map((sig, i) => {
+              const sigTech = scanResult.technicalData?.find(t => t.symbol === sig.ticker);
+              const price = prices[sig.ticker];
+              return (
+                <div key={sig.ticker} style={{ ...cardStyle }}>
+                  {/* Header */}
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 6 }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                        <span style={{ fontSize: 15, fontWeight: 600 }}>{sig.ticker}</span>
+                        <Pill signal={sig.signal} />
+                        <span style={{ fontSize: 10, color: C.dim }}>#{i + 1}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: C.muted }}>{sig.reason}</div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                      {price && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 500 }}>PKR {price.currentPrice.toFixed(2)}</span>
+                          {price.changePercent !== undefined && (
+                            <span style={{ fontSize: 10, color: price.changePercent >= 0 ? C.greenText : C.redText }}>
+                              {price.changePercent >= 0 ? "+" : ""}{price.changePercent.toFixed(2)}%
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {sig.suggestedEntry && (
+                        <span style={{ fontSize: 10, color: C.amberText, background: C.amberDim, padding: "2px 8px", borderRadius: 6, whiteSpace: "nowrap" }}>
+                          Entry: {sig.suggestedEntry}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {sig.newsHeadline && sig.newsHeadline !== "No recent news" && (
+                    <div style={{ fontSize: 10, color: C.dim, marginBottom: 6, fontStyle: "italic" }}>
+                      📰 {sig.newsHeadline}
+                    </div>
+                  )}
+
+                  <ConfBar pct={sig.confidence} signal={sig.signal} />
+
+                  {(sig.catalysts?.length > 0 || sig.risks?.length > 0) && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+                      {sig.catalysts?.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 9, color: C.greenText, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.4 }}>Catalysts</div>
+                          {sig.catalysts.map((c, j) => (
+                            <div key={j} style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>▲ {c}</div>
+                          ))}
+                        </div>
+                      )}
+                      {sig.risks?.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 9, color: C.redText, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.4 }}>Risks</div>
+                          {sig.risks.map((r, j) => (
+                            <div key={j} style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>▼ {r}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Technical indicators row (same as watchlist) */}
+                  {sigTech && (
+                    <div style={{ marginTop: 12, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {([
+                          ["RSI", sigTech.rsi.toFixed(0), sigTech.rsi < 30 ? C.greenText : sigTech.rsi > 70 ? C.redText : C.muted],
+                          ["EMA20", sigTech.ema20.toFixed(2), C.muted],
+                          ["EMA50", sigTech.ema50.toFixed(2), C.muted],
+                          ["Vol", `${sigTech.volumeRatio.toFixed(1)}x avg`, sigTech.volumeRatio >= 1.5 ? C.greenText : C.muted],
+                          ["Score", `${sigTech.compositeScore}/100`, sigTech.compositeScore >= 60 ? C.greenText : sigTech.compositeScore >= 40 ? C.amberText : C.redText],
+                        ] as [string, string, string][]).map(([lbl, val, col]) => (
+                          <div key={lbl} style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 4, alignItems: "center" }}>
+                            <span style={{ fontSize: 8, color: C.dim }}>{lbl}</span>
+                            <span style={{ fontSize: 10, fontWeight: 500, color: col }}>{val}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Add to watchlist */}
+                  <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                    {watching.find(w => w.ticker === sig.ticker) ? (
+                      <span style={{ fontSize: 9, color: C.greenText }}>✓ In Watchlist</span>
+                    ) : (
+                      <button onClick={() => quickAddWatch(sig.ticker)} style={{ ...btnSt, fontSize: 9, padding: "3px 10px", borderColor: C.blue + "50", color: C.blueText }}>
+                        + Add to Watchlist
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
 
             {/* Disclaimer */}
             <div style={{ fontSize: 9, color: C.dim, textAlign: "center", padding: "12px 0", lineHeight: 1.6 }}>
@@ -590,6 +740,7 @@ export default function Dashboard() {
               const marketVal = livePrice ? livePrice * h.shares : null;
               const pnl = marketVal ? marketVal - cost : null;
               const pnlPct = pnl ? (pnl / cost) * 100 : null;
+              const tech = holdingTech[h.ticker];
               return (
                 <div key={h.ticker} style={cardStyle}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
@@ -597,6 +748,7 @@ export default function Dashboard() {
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 15, fontWeight: 600 }}>{h.ticker}</span>
                         {h.shariah && <span style={{ fontSize: 9, color: C.greenText, background: C.greenDim, padding: "1px 5px", borderRadius: 3 }}>Shariah ✓</span>}
+                        {tech && <Pill signal={tech.technicalSignal} small />}
                       </div>
                       <div style={{ fontSize: 10, color: C.muted }}>{h.name}</div>
                     </div>
@@ -625,6 +777,8 @@ export default function Dashboard() {
                       )}
                     </div>
                   </div>
+
+                  {/* P&L grid */}
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
                     {[
                       ["Shares", h.shares.toLocaleString()],
@@ -640,12 +794,36 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
+
+                  {/* Technical indicators row */}
+                  {tech && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {([
+                          ["RSI", tech.rsi.toFixed(0), tech.rsi < 30 ? C.greenText : tech.rsi > 70 ? C.redText : C.muted],
+                          ["EMA20", tech.ema20.toFixed(2), C.muted],
+                          ["EMA50", tech.ema50.toFixed(2), C.muted],
+                          ["Vol", `${tech.volumeRatio.toFixed(1)}x avg`, tech.volumeRatio >= 1.5 ? C.greenText : C.muted],
+                          ["Score", `${tech.compositeScore}/100`, tech.compositeScore >= 60 ? C.greenText : tech.compositeScore >= 40 ? C.amberText : C.redText],
+                        ] as [string, string, string][]).map(([lbl, val, col]) => (
+                          <div key={lbl} style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 4, alignItems: "center" }}>
+                            <span style={{ fontSize: 8, color: C.dim }}>{lbl}</span>
+                            <span style={{ fontSize: 10, fontWeight: 500, color: col }}>{val}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {tech.reasons?.[0] && (
+                        <div style={{ fontSize: 9, color: C.muted, marginTop: 5 }}>▲ {tech.reasons[0]}</div>
+                      )}
+                    </div>
+                  )}
+
                   {/* AI suggestion */}
                   {(() => {
                     const s = getHoldingSuggestion(h.ticker, pnlPct);
                     if (!s) return (
                       <div style={{ marginTop: 8, fontSize: 9, color: C.dim, fontStyle: "italic" }}>
-                        Run a full scan to get AI advice for this holding.
+                        Run a full scan or load signals to get AI advice for this holding.
                       </div>
                     );
                     const col = s.signal === "BUY" || s.signal === "STRONG_BUY" ? C.greenText
@@ -687,18 +865,53 @@ export default function Dashboard() {
         {/* ── WATCHLIST TAB ── */}
         {tab === "watching" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            {/* Header row: label + action buttons */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
               <span style={s_label}>Watchlist · KMI-30 / Shariah tickers</span>
               {watching.length > 0 && (
-                <button onClick={fetchWatchTech} disabled={loadingWatchTech} style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}>
-                  {loadingWatchTech ? "Loading…" : "↻ Load Signals"}
-                </button>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <button onClick={fetchWatchTech} disabled={loadingWatchTech || runningWatchAI} style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}>
+                    {loadingWatchTech ? "Loading…" : "↻ Technicals"}
+                  </button>
+                  <button
+                    onClick={runWatchlistAI}
+                    disabled={runningWatchAI || loadingWatchTech || !settings.apiKey}
+                    style={{ ...accentBtn, fontSize: 9, padding: "3px 10px", opacity: (runningWatchAI || !settings.apiKey) ? 0.5 : 1 }}
+                    title={!settings.apiKey ? "Set your API key in Settings first" : "Run AI analysis on your watchlist using the same pipeline as Buy Opportunities"}
+                  >
+                    {runningWatchAI ? "⟳ Analysing…" : "✦ AI Analysis"}
+                  </button>
+                </div>
               )}
             </div>
+
+            {/* Sort controls */}
+            {watching.length > 1 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                <span style={{ fontSize: 9, color: C.dim }}>Sort:</span>
+                {(["signal", "score", "name"] as const).map(opt => (
+                  <button key={opt} onClick={() => setSortWatch(opt)} style={{
+                    ...btnSt, fontSize: 9, padding: "2px 9px",
+                    background: sortWatch === opt ? C.border2 : "transparent",
+                    color: sortWatch === opt ? C.text : C.muted,
+                  }}>
+                    {opt === "signal" ? "Signal strength" : opt === "score" ? "Technical score" : "Name A–Z"}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* AI Analysis error */}
+            {watchAIError && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", background: C.redDim, border: `0.5px solid ${C.red}`, borderRadius: 6, marginBottom: 8 }}>
+                <span style={{ fontSize: 10, color: C.redText, flex: 1 }}>✗ {watchAIError}</span>
+                <button onClick={() => setWatchAIError("")} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
+              </div>
+            )}
             {watching.length === 0 && (
               <div style={{ color: C.dim, fontSize: 11, padding: "20px 0" }}>Add tickers below to track them.</div>
             )}
-            {watching.map(w => {
+            {sortedWatch(watching).map(w => {
               const p = prices[w.ticker];
               const sig = watchSignals[w.ticker];
               const tech = watchTech[w.ticker];
@@ -818,7 +1031,7 @@ export default function Dashboard() {
                   {/* ── Prompt when nothing loaded yet ── */}
                   {!tech && !activeSig && (
                     <div style={{ fontSize: 9, color: C.dim, fontStyle: "italic" }}>
-                      Click "↻ Load Signals" above to fetch EMA / RSI / volume data.
+                      Click "↻ Technicals" to load RSI/EMA/volume data, or "✦ AI Analysis" for full AI signals.
                     </div>
                   )}
                 </div>
