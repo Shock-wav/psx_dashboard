@@ -70,6 +70,33 @@ async function fetchFeed(
   }
 }
 
+/**
+ * Finance-relevance filter — strips military, sports, entertainment and other
+ * non-market content before it reaches the AI.  At least one keyword must appear
+ * in the combined title + description text (case-insensitive).
+ */
+const FINANCE_KEYWORDS = [
+  "stock", "market", "psx", "kse", "rupee", "pkr", "sbp", "secp",
+  "bank", "banking", "finance", "financial", "economy", "economic",
+  "inflation", "interest rate", "interest", "oil", "gas", "energy", "power",
+  "textile", "cement", "fertilizer", "tax", "budget", "trade",
+  "import", "export", "dollar", "investment", "investor", "corporate",
+  "earnings", "profit", "loss", "revenue", "dividend", "turnover",
+  "ipo", "shares", "equity", "bond", "treasury", "sukuk",
+  "gdp", "fiscal", "monetary", "currency", "devaluation", "exchange rate",
+  "petroleum", "electricity", "coal", "mining", "refinery",
+  "agriculture", "wheat", "sugar", "cotton", "rice", "crop",
+  "company", "companies", "industry", "industries", "sector",
+  "business", "enterprise", "commercial", "bourse",
+  "quarter", "annual", "result", "report", "listing", "privatisation",
+  "ogdc", "ppl", "pso", "engro", "luck", "mebl", "hbl", "ubl", "mcb",
+];
+
+function isFinanceRelevant(title: string, description: string): boolean {
+  const text = (title + " " + description).toLowerCase();
+  return FINANCE_KEYWORDS.some((kw) => text.includes(kw));
+}
+
 /** Minimal RSS XML parser — handles both CDATA and plain text fields. */
 function parseRSS(xml: string, source: string, max: number): NewsItem[] {
   const items: NewsItem[] = [];
@@ -82,6 +109,10 @@ function parseRSS(xml: string, source: string, max: number): NewsItem[] {
     if (!title || title.length < 4) continue;
 
     const description = getTag(block, "description");
+
+    // Skip articles with no connection to finance / markets / economy
+    if (!isFinanceRelevant(title, description)) continue;
+
     const pubDate = getTag(block, "pubDate");
 
     items.push({

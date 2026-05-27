@@ -53,8 +53,8 @@ function ConfBar({ pct, signal, label }: { pct: number; signal?: string; label?:
 // ─── Derive catalysts & risks from raw technical data ──────────────────────
 interface StockTechLocal {
   symbol: string; compositeScore: number; technicalSignal: string;
-  rsi: number; ema20: number; ema50: number; volumeRatio: number;
-  crossoverSignal: string; priceVsEma20: string; reasons: string[];
+  rsi: number; ema20: number; ema50: number; currentPrice: number;
+  volumeRatio: number; crossoverSignal: string; priceVsEma20: string; reasons: string[];
 }
 function techCatalysts(t: StockTechLocal): string[] {
   const out: string[] = [];
@@ -127,6 +127,80 @@ const btnSt: React.CSSProperties = { fontSize: 10, padding: "4px 10px", borderRa
 const accentBtn: React.CSSProperties = { ...btnSt, borderColor: C.green + "80", color: C.greenText };
 const dangerBtn: React.CSSProperties = { ...btnSt, borderColor: C.amber + "60", color: C.amberText };
 
+// ─── Holdings sector pie/donut chart (pure SVG, zero dependencies) ─────────
+const PIE_COLORS = [C.green, C.blue, C.amber, C.purple, "#c08060", "#60b0c0", "#a0c060", "#c060a0"];
+
+interface HoldingForPie { ticker: string; name: string; shares: number; avgPrice: number; }
+function HoldingsPieChart({ holdings, prices }: {
+  holdings: HoldingForPie[];
+  prices: Record<string, { currentPrice?: number }>;
+}) {
+  // Accumulate value by sector (parse from "TICKER · Sector Name")
+  const sectorValues: Record<string, number> = {};
+  let total = 0;
+  for (const h of holdings) {
+    const liveP = prices[h.ticker]?.currentPrice;
+    const val = (liveP ?? h.avgPrice) * h.shares;
+    const sector = h.name.includes(" · ") ? h.name.split(" · ").slice(1).join(" · ") : h.ticker;
+    sectorValues[sector] = (sectorValues[sector] ?? 0) + val;
+    total += val;
+  }
+  if (total === 0 || Object.keys(sectorValues).length === 0) return null;
+
+  const entries = Object.entries(sectorValues).sort((a, b) => b[1] - a[1]);
+  const cx = 55, cy = 55, R = 46, ir = 26;
+
+  let angle = -Math.PI / 2; // start from 12-o'clock
+  const slices = entries.map(([sector, val], i) => {
+    const frac = val / total;
+    const sweep = frac * 2 * Math.PI;
+    const a0 = angle, a1 = angle + sweep;
+    angle = a1;
+    const large = frac > 0.5 ? 1 : 0;
+    const cos0 = Math.cos(a0), sin0 = Math.sin(a0);
+    const cos1 = Math.cos(a1), sin1 = Math.sin(a1);
+    const d = [
+      `M ${(cx + R * cos0).toFixed(2)} ${(cy + R * sin0).toFixed(2)}`,
+      `A ${R} ${R} 0 ${large} 1 ${(cx + R * cos1).toFixed(2)} ${(cy + R * sin1).toFixed(2)}`,
+      `L ${(cx + ir * cos1).toFixed(2)} ${(cy + ir * sin1).toFixed(2)}`,
+      `A ${ir} ${ir} 0 ${large} 0 ${(cx + ir * cos0).toFixed(2)} ${(cy + ir * sin0).toFixed(2)}`,
+      "Z",
+    ].join(" ");
+    return { d, sector, val, frac, color: PIE_COLORS[i % PIE_COLORS.length] };
+  });
+
+  return (
+    <div style={{ background: "#111", borderRadius: 8, padding: "10px 14px", marginBottom: 14, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+      <svg width={110} height={110} viewBox="0 0 110 110" style={{ flexShrink: 0 }}>
+        {slices.map((s, i) => (
+          <path key={i} d={s.d} fill={s.color} opacity={0.85} stroke={C.bg} strokeWidth={1.5} />
+        ))}
+        {/* Centre label */}
+        <text x={cx} y={cy - 4} textAnchor="middle" fill={C.muted} fontSize={8}>Portfolio</text>
+        <text x={cx} y={cy + 8} textAnchor="middle" fill={C.text} fontSize={9} fontWeight="600">
+          {entries.length} sector{entries.length !== 1 ? "s" : ""}
+        </text>
+      </svg>
+      <div style={{ flex: 1, minWidth: 120 }}>
+        <div style={{ ...s_label, marginBottom: 6 }}>Sector Breakdown</div>
+        {slices.map((s, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0, display: "inline-block" }} />
+            <span style={{ fontSize: 10, color: C.muted, flex: 1, lineHeight: 1.3 }}>{s.sector}</span>
+            <span style={{ fontSize: 10, color: C.text, fontWeight: 500, whiteSpace: "nowrap" }}>
+              {(s.frac * 100).toFixed(1)}%
+            </span>
+          </div>
+        ))}
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: `0.5px solid ${C.border}`, fontSize: 9, color: C.dim }}>
+          Total value: PKR {Math.round(total).toLocaleString()}
+          {holdings.some(h => !prices[h.ticker]?.currentPrice) && " (partial — some prices loading)"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ────────────────────────────────────────────────────────
 export default function Dashboard() {
   // Persistence
@@ -145,6 +219,10 @@ export default function Dashboard() {
   const [loadingPrices, setLoadingPrices] = useState(false);
   const [lastUpdated, setLastUpdated] = useState("");
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
+
+  // Scan result tickers need prices too — keep a ref so allTickers stays stable
+  // between renders that don't change the actual ticker list
+  const scanTickersRef = useRef<string[]>([]);
 
   // Scanner
   const [scanResult, setScanResult] = useState<{
@@ -174,9 +252,8 @@ export default function Dashboard() {
   const [loadingWatchTech, setLoadingWatchTech] = useState(false);
 
   // Sort states
-  const SIGNAL_RANK: Record<string, number> = { STRONG_BUY: 0, BUY: 1, WATCH: 2, HOLD: 3, NEUTRAL: 4, SELL: 5, AVOID: 6 };
   const [sortOpps, setSortOpps] = useState<"confidence" | "name">("confidence");
-  const [sortWatch, setSortWatch] = useState<"signal" | "name">("signal");
+  const [sortWatch, setSortWatch] = useState<"confidence" | "name">("confidence");
 
   // Settings
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
@@ -195,9 +272,11 @@ export default function Dashboard() {
   const [pendingDeleteWatch, setPendingDeleteWatch] = useState<string | null>(null);
 
   // ── Price fetching ──────────────────────────────────────────────────────
+  // Include scan result tickers so Buy Opportunity cards show live prices
   const allTickers = [...new Set([
     ...holdings.map(h => h.ticker),
     ...watching.map(w => w.ticker),
+    ...scanTickersRef.current,
   ])];
 
   const fetchPrices = useCallback(async () => {
@@ -249,8 +328,11 @@ export default function Dashboard() {
         throw new Error(raw.length > 200 ? raw.slice(0, 200) + "…" : raw);
       }
       setScanPhase("Pass 2 · Scoring technicals & selecting best picks…");
+      const newSignals: AISignal[] = data.signals ?? [];
+      // Register scan tickers so the prices hook fetches them on next tick
+      scanTickersRef.current = newSignals.map((s: AISignal) => s.ticker);
       setScanResult({
-        signals: data.signals ?? [],
+        signals: newSignals,
         newsAnalysis: data.newsAnalysis ?? null,
         expandedSectors: data.expandedSectors ?? [],
         totalScanned: data.totalScanned ?? 0,
@@ -365,13 +447,29 @@ export default function Dashboard() {
       name: quote?.sector ? `${t} · ${quote.sector}` : t,
     }]);
     setNewWatch("");
+    // Auto-load technicals immediately — no need to click "Technicals"
+    fetchSingleWatchTech(t);
   };
 
   // ── Quick-add from scan results (no PSX validation needed) ─────────────
   const quickAddWatch = (ticker: string) => {
     if (!watching.find(w => w.ticker === ticker)) {
       setWatching(prev => [...prev, { ticker, name: ticker }]);
+      // Auto-load technicals (tech data from the scan is already in watchTech
+      // via runWatchlistAI, but scanResult.technicalData might also have it)
+      if (!watchTech[ticker]) fetchSingleWatchTech(ticker);
     }
+  };
+
+  // ── Fetch technicals for a single ticker (fire-and-forget) ─────────────
+  const fetchSingleWatchTech = async (ticker: string) => {
+    try {
+      const res = await fetch(`/api/technicals?symbol=${ticker}`);
+      if (res.ok) {
+        const tech = await res.json();
+        setWatchTech(prev => ({ ...prev, [ticker]: tech }));
+      }
+    } catch { /* ignore */ }
   };
 
   // ── Fetch technicals for all watchlist tickers ───────────────────────────
@@ -463,11 +561,13 @@ export default function Dashboard() {
   const sortedWatch = (items: typeof watching) => {
     const arr = [...items];
     if (sortWatch === "name") return arr.sort((a, b) => a.ticker.localeCompare(b.ticker));
-    // "signal" — STRONG_BUY first, unlabeled last
+    // "confidence" — AI confidence desc, tech score as fallback, unscored last
     return arr.sort((a, b) => {
-      const sigA = scanResult?.signals.find(s => s.ticker === a.ticker)?.signal ?? watchSignals[a.ticker]?.signal ?? watchTech[a.ticker]?.technicalSignal ?? "ZZZ";
-      const sigB = scanResult?.signals.find(s => s.ticker === b.ticker)?.signal ?? watchSignals[b.ticker]?.signal ?? watchTech[b.ticker]?.technicalSignal ?? "ZZZ";
-      return (SIGNAL_RANK[sigA] ?? 9) - (SIGNAL_RANK[sigB] ?? 9);
+      const activeSigA = scanResult?.signals.find(s => s.ticker === a.ticker) ?? watchSignals[a.ticker];
+      const activeSigB = scanResult?.signals.find(s => s.ticker === b.ticker) ?? watchSignals[b.ticker];
+      const confA = activeSigA ? activeSigA.confidence : (watchTech[a.ticker]?.compositeScore ?? -1);
+      const confB = activeSigB ? activeSigB.confidence : (watchTech[b.ticker]?.compositeScore ?? -1);
+      return confB - confA;
     });
   };
 
@@ -603,36 +703,50 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* Expanded section: sources + raw headlines */}
+                {/* Expanded section: sources + parsed headlines */}
                 {expandNewsPanel && (
                   <div style={{ marginTop: 10, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
-                    {/* Sources */}
+                    {/* Sources pills */}
                     {scanResult.newsSources.length > 0 && (
-                      <div style={{ marginBottom: 8 }}>
-                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
-                          News Sources Used
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>
+                          Finance news sources · all headlines pre-filtered for market relevance
                         </div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                          {scanResult.newsSources.map((s, i) => (
-                            <span key={i} style={{ fontSize: 9, color: C.muted, background: "#111", padding: "2px 7px", borderRadius: 6, border: `0.5px solid ${C.border2}` }}>
-                              {s}
+                          {scanResult.newsSources.map((src, i) => (
+                            <span key={i} style={{ fontSize: 9, color: C.blueText, background: C.blueDim, padding: "2px 8px", borderRadius: 6, border: `0.5px solid ${C.blue}40` }}>
+                              {src}
                             </span>
                           ))}
                         </div>
                       </div>
                     )}
 
-                    {/* Raw headlines */}
+                    {/* Headlines — parsed into source badge + clean title */}
                     {scanResult.newsHeadlines.length > 0 && (
                       <div>
-                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
-                          Headlines Fed to AI
+                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+                          Top market headlines fed to AI ({scanResult.newsHeadlines.length} of most recent)
                         </div>
-                        {scanResult.newsHeadlines.slice(0, 8).map((h, i) => (
-                          <div key={i} style={{ fontSize: 9, color: C.muted, marginBottom: 3, paddingLeft: 8, borderLeft: `2px solid ${C.border2}`, lineHeight: 1.5 }}>
-                            {h}
-                          </div>
-                        ))}
+                        {scanResult.newsHeadlines.slice(0, 10).map((raw, i) => {
+                          // Parse "[Source · Date] Title — desc" format
+                          const m = raw.match(/^\[([^\]·]+?)(?:\s*·\s*([^\]]+))?\]\s*(.+?)(?:\s*—.*)?$/);
+                          const src   = m ? m[1].trim() : "";
+                          const title = m ? m[3].trim() : raw;
+                          return (
+                            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 7, marginBottom: 6, paddingLeft: 0 }}>
+                              {src && (
+                                <span style={{ fontSize: 8, color: C.dim, background: "#161616", border: `0.5px solid ${C.border2}`, borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap", marginTop: 1, flexShrink: 0 }}>
+                                  {src}
+                                </span>
+                              )}
+                              <span style={{ fontSize: 10, color: C.muted, lineHeight: 1.5, flex: 1 }}>{title}</span>
+                            </div>
+                          );
+                        })}
+                        <div style={{ fontSize: 8, color: C.dim, marginTop: 4 }}>
+                          ✓ Non-finance content (sports, politics, entertainment) filtered before AI analysis
+                        </div>
                       </div>
                     )}
                   </div>
@@ -688,7 +802,10 @@ export default function Dashboard() {
             {/* Signal cards */}
             {scanResult && sortedOpps(scanResult.signals).map((sig, i) => {
               const sigTech = scanResult.technicalData?.find(t => t.symbol === sig.ticker);
-              const price = prices[sig.ticker];
+              const liveQuote = prices[sig.ticker];
+              // Fall back to EOD close from technicals if live price hasn't arrived yet
+              const displayPrice = liveQuote?.currentPrice ?? sigTech?.currentPrice;
+              const displayChange = liveQuote?.changePercent;
               return (
                 <div key={sig.ticker} style={{ ...cardStyle }}>
                   {/* Header */}
@@ -702,12 +819,12 @@ export default function Dashboard() {
                       <div style={{ fontSize: 11, color: C.muted }}>{sig.reason}</div>
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                      {price && (
+                      {displayPrice && (
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <span style={{ fontSize: 13, fontWeight: 500 }}>PKR {price.currentPrice.toFixed(2)}</span>
-                          {price.changePercent !== undefined && (
-                            <span style={{ fontSize: 10, color: price.changePercent >= 0 ? C.greenText : C.redText }}>
-                              {price.changePercent >= 0 ? "+" : ""}{price.changePercent.toFixed(2)}%
+                          <span style={{ fontSize: 13, fontWeight: 500 }}>PKR {displayPrice.toFixed(2)}</span>
+                          {displayChange !== undefined && (
+                            <span style={{ fontSize: 10, color: displayChange >= 0 ? C.greenText : C.redText }}>
+                              {displayChange >= 0 ? "+" : ""}{displayChange.toFixed(2)}%
                             </span>
                           )}
                         </div>
@@ -794,6 +911,10 @@ export default function Dashboard() {
         {/* ── HOLDINGS TAB ── */}
         {tab === "holdings" && (
           <div>
+            {/* Pie chart — only when 2+ distinct sectors */}
+            {holdings.length > 0 && (
+              <HoldingsPieChart holdings={holdings} prices={prices} />
+            )}
             <div style={{ ...s_label, marginBottom: 10 }}>My Holdings</div>
             {holdings.map(h => {
               const p = prices[h.ticker];
@@ -932,8 +1053,13 @@ export default function Dashboard() {
               <span style={s_label}>Watchlist · KMI-30 / Shariah tickers</span>
               {watching.length > 0 && (
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <button onClick={fetchWatchTech} disabled={loadingWatchTech || runningWatchAI} style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}>
-                    {loadingWatchTech ? "Loading…" : "↻ Technicals"}
+                  <button
+                    onClick={async () => { await fetchWatchTech(); fetchPrices(); }}
+                    disabled={loadingWatchTech || runningWatchAI}
+                    style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}
+                    title="Refresh technicals and prices for all watchlist tickers"
+                  >
+                    {loadingWatchTech ? "↻ Refreshing…" : "↻ Refresh"}
                   </button>
                   <button
                     onClick={runWatchlistAI}
@@ -951,13 +1077,13 @@ export default function Dashboard() {
             {watching.length > 1 && (
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
                 <span style={{ fontSize: 9, color: C.dim }}>Sort:</span>
-                {(["signal", "name"] as const).map(opt => (
+                {(["confidence", "name"] as const).map(opt => (
                   <button key={opt} onClick={() => setSortWatch(opt)} style={{
                     ...btnSt, fontSize: 9, padding: "2px 9px",
                     background: sortWatch === opt ? C.border2 : "transparent",
                     color: sortWatch === opt ? C.text : C.muted,
                   }}>
-                    {opt === "signal" ? "Signal strength" : "Name A–Z"}
+                    {opt === "confidence" ? "AI Confidence ↓" : "Name A–Z"}
                   </button>
                 ))}
               </div>
@@ -1093,7 +1219,7 @@ export default function Dashboard() {
                   {/* ── Prompt when nothing loaded yet ── */}
                   {!tech && !activeSig && (
                     <div style={{ fontSize: 9, color: C.dim, fontStyle: "italic" }}>
-                      Click "↻ Technicals" to load RSI/EMA/volume data, or "✦ AI Analysis" for full AI signals.
+                      Technicals loading… or click "↻ Refresh" to retry, "✦ AI Analysis" for full AI signals.
                     </div>
                   )}
                 </div>
