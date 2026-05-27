@@ -255,6 +255,37 @@ function HoldingsPieChart({ holdings, prices }: {
   );
 }
 
+/** Synthesise the AI sector/factor data into flowing prose for the expanded view. */
+function buildExpandedNarrative(analysis: NewsAnalysis): string {
+  const parts: string[] = [];
+  const neg = analysis.affectedSectors.filter(s => s.impact === "NEGATIVE");
+  const pos = analysis.affectedSectors.filter(s => s.impact === "POSITIVE");
+
+  if (neg.length === 1) {
+    parts.push(`The ${neg[0].sectorName} sector is under notable pressure — ${neg[0].reason.replace(/\.$/, "").toLowerCase()}.`);
+  } else if (neg.length > 1) {
+    const list = neg.map(s => `${s.sectorName} (${s.reason.replace(/\.$/, "").toLowerCase()})`).join("; ");
+    parts.push(`Several sectors are facing headwinds: ${list}.`);
+  }
+
+  if (pos.length === 1) {
+    parts.push(`Meanwhile, the ${pos[0].sectorName} sector is positioned to benefit — ${pos[0].reason.replace(/\.$/, "").toLowerCase()}.`);
+  } else if (pos.length > 1) {
+    const list = pos.map(s => `${s.sectorName} (${s.reason.replace(/\.$/, "").toLowerCase()})`).join("; ");
+    parts.push(`Sectors with a positive outlook include ${list}.`);
+  }
+
+  if (analysis.globalFactors.length > 0) {
+    parts.push(`On the global front, ${analysis.globalFactors.join(", ")} are key factors shaping the broader market backdrop.`);
+  }
+
+  if (parts.length === 0) {
+    parts.push("No specific sector catalysts were identified from today's news. Market conditions appear broadly neutral based on available data.");
+  }
+
+  return parts.join(" ");
+}
+
 // ─── Main Dashboard ────────────────────────────────────────────────────────
 export default function Dashboard() {
   // Persistence
@@ -714,22 +745,14 @@ export default function Dashboard() {
             {/* News context panel — hidden while scanning to avoid overlap with loader */}
             {scanResult?.newsAnalysis && !scanning && (
               <div style={{ ...cardStyle, marginBottom: 14 }}>
-                {/* Header row */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={s_label}>Macro Context · Today</span>
-                    {scanResult.newsFromCache && (
-                      <span style={{ fontSize: 8, color: C.dim, background: C.border2, padding: "1px 6px", borderRadius: 8 }}>
-                        ✓ cached — news unchanged
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => setExpandNewsPanel(v => !v)}
-                    style={{ ...btnSt, fontSize: 9, padding: "2px 9px" }}
-                  >
-                    {expandNewsPanel ? "▲ Collapse" : "▼ Expand"}
-                  </button>
+                {/* Header */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={s_label}>Macro Context · Today</span>
+                  {scanResult.newsFromCache && (
+                    <span style={{ fontSize: 8, color: C.dim, background: C.border2, padding: "1px 6px", borderRadius: 8 }}>
+                      ✓ cached
+                    </span>
+                  )}
                 </div>
 
                 {/* AI summary */}
@@ -737,18 +760,9 @@ export default function Dashboard() {
                   {scanResult.newsAnalysis.summary}
                 </p>
 
-                {/* Global factor chips */}
-                {scanResult.newsAnalysis.globalFactors.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 8 }}>
-                    {scanResult.newsAnalysis.globalFactors.map((f, i) => (
-                      <span key={i} style={{ fontSize: 9, color: C.blueText, background: C.blueDim, padding: "2px 7px", borderRadius: 10 }}>{f}</span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Affected sectors */}
+                {/* Sector impact list */}
                 {scanResult.newsAnalysis.affectedSectors.length > 0 && (
-                  <div style={{ marginBottom: expandNewsPanel ? 10 : 0 }}>
+                  <div style={{ marginBottom: 8 }}>
                     {scanResult.newsAnalysis.affectedSectors.map((sec, i) => (
                       <div key={i} style={{ fontSize: 10, color: sec.impact === "POSITIVE" ? C.greenText : sec.impact === "NEGATIVE" ? C.redText : C.muted, marginBottom: 2 }}>
                         {sec.impact === "POSITIVE" ? "▲" : sec.impact === "NEGATIVE" ? "▼" : "–"} {sec.sectorName}: {sec.reason}
@@ -757,94 +771,38 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* Expanded section: deep-dive on each driver from the summary */}
+                {/* Global factor chips */}
+                {scanResult.newsAnalysis.globalFactors.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 6 }}>
+                    {scanResult.newsAnalysis.globalFactors.map((f, i) => (
+                      <span key={i} style={{ fontSize: 9, color: C.blueText, background: C.blueDim, padding: "2px 7px", borderRadius: 10 }}>{f}</span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Expanded narrative */}
                 {expandNewsPanel && (
-                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
-
-                    {/* ── Why each sector is moving ── */}
-                    {scanResult.newsAnalysis.affectedSectors.filter(s => s.impact !== "NEUTRAL").length > 0 && (
-                      <div style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-                          What's driving today's market — sector by sector
-                        </div>
-                        {scanResult.newsAnalysis.affectedSectors
-                          .filter(s => s.impact !== "NEUTRAL")
-                          .map((sec, i) => {
-                            const isPos = sec.impact === "POSITIVE";
-                            const col   = isPos ? C.greenText : C.redText;
-                            const bg    = isPos ? C.greenDim  : C.redDim;
-                            const bdr   = isPos ? C.green     : C.red;
-                            return (
-                              <div key={i} style={{ background: bg, border: `0.5px solid ${bdr}30`, borderRadius: 6, padding: "8px 10px", marginBottom: 6 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
-                                  <span style={{ fontSize: 10, fontWeight: 700, color: col }}>
-                                    {isPos ? "▲" : "▼"} {sec.sectorName}
-                                  </span>
-                                  <span style={{ fontSize: 8, color: col, background: `${bdr}20`, padding: "1px 6px", borderRadius: 8, fontWeight: 600 }}>
-                                    {sec.impact}
-                                  </span>
-                                </div>
-                                <p style={{ fontSize: 10, color: C.muted, margin: 0, lineHeight: 1.6 }}>
-                                  {sec.reason}
-                                </p>
-                              </div>
-                            );
-                          })}
-                      </div>
-                    )}
-
-                    {/* ── Global macro factors ── */}
-                    {scanResult.newsAnalysis.globalFactors.length > 0 && (
-                      <div style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-                          Global factors in play
-                        </div>
-                        {scanResult.newsAnalysis.globalFactors.map((f, i) => (
-                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                            <span style={{ width: 4, height: 4, borderRadius: "50%", background: C.blue, flexShrink: 0, display: "inline-block" }} />
-                            <span style={{ fontSize: 10, color: C.blueText }}>{f}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* ── Source headlines (transparency) ── */}
-                    {scanResult.newsHeadlines.length > 0 && (
-                      <div style={{ paddingTop: 8, borderTop: `0.5px solid ${C.border}` }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                          <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                            Raw headlines that informed the above analysis
-                          </div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, justifyContent: "flex-end" }}>
-                            {scanResult.newsSources.map((src, i) => (
-                              <span key={i} style={{ fontSize: 8, color: C.dim, background: "#161616", border: `0.5px solid ${C.border2}`, borderRadius: 4, padding: "1px 5px" }}>
-                                {src}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                        {scanResult.newsHeadlines.slice(0, 10).map((raw, i) => {
-                          const m = raw.match(/^\[([^\]·]+?)(?:\s*·\s*([^\]]+))?\]\s*(.+?)(?:\s*—.*)?$/);
-                          const src   = m ? m[1].trim() : "";
-                          const title = m ? m[3].trim() : raw;
-                          return (
-                            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 7, marginBottom: 5 }}>
-                              {src && (
-                                <span style={{ fontSize: 8, color: C.dim, background: "#161616", border: `0.5px solid ${C.border2}`, borderRadius: 3, padding: "1px 5px", whiteSpace: "nowrap", marginTop: 2, flexShrink: 0 }}>
-                                  {src}
-                                </span>
-                              )}
-                              <span style={{ fontSize: 10, color: C.muted, lineHeight: 1.5 }}>{title}</span>
-                            </div>
-                          );
-                        })}
-                        <div style={{ fontSize: 8, color: C.dim, marginTop: 6 }}>
-                          ✓ Non-finance content filtered before AI analysis
-                        </div>
+                  <div style={{ marginTop: 8, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
+                    <p style={{ fontSize: 11, color: C.muted, lineHeight: 1.7, margin: "0 0 10px" }}>
+                      {buildExpandedNarrative(scanResult.newsAnalysis)}
+                    </p>
+                    {scanResult.newsSources.length > 0 && (
+                      <div style={{ fontSize: 9, color: C.dim }}>
+                        Sources: {scanResult.newsSources.join(" · ")}
                       </div>
                     )}
                   </div>
                 )}
+
+                {/* Expand / Collapse button — bottom right */}
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                  <button
+                    onClick={() => setExpandNewsPanel(v => !v)}
+                    style={{ ...btnSt, fontSize: 9, padding: "2px 9px" }}
+                  >
+                    {expandNewsPanel ? "▲ Less" : "▼ Read more"}
+                  </button>
+                </div>
               </div>
             )}
 
