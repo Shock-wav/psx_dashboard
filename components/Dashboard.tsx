@@ -154,8 +154,12 @@ export default function Dashboard() {
     totalScanned: number;
     passedTechnicals: number;
     timestamp: string;
-    technicalData: StockTech[];  // full scored list from scanner
+    technicalData: StockTech[];
+    newsHeadlines: string[];     // raw headlines fed to the AI
+    newsSources: string[];       // which RSS sources contributed
+    newsFromCache: boolean;      // true = AI reused cached analysis (news unchanged)
   } | null>(null);
+  const [expandNewsPanel, setExpandNewsPanel] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
   const [scanPhase, setScanPhase] = useState("");
@@ -171,8 +175,8 @@ export default function Dashboard() {
 
   // Sort states
   const SIGNAL_RANK: Record<string, number> = { STRONG_BUY: 0, BUY: 1, WATCH: 2, HOLD: 3, NEUTRAL: 4, SELL: 5, AVOID: 6 };
-  const [sortOpps, setSortOpps] = useState<"confidence" | "signal" | "name">("confidence");
-  const [sortWatch, setSortWatch] = useState<"signal" | "score" | "name">("signal");
+  const [sortOpps, setSortOpps] = useState<"confidence" | "name">("confidence");
+  const [sortWatch, setSortWatch] = useState<"signal" | "name">("signal");
 
   // Settings
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
@@ -253,6 +257,9 @@ export default function Dashboard() {
         passedTechnicals: data.passedTechnicals ?? 0,
         timestamp: data.timestamp,
         technicalData: data.technicalData ?? [],
+        newsHeadlines: data.newsHeadlines ?? [],
+        newsSources: data.newsSources ?? [],
+        newsFromCache: data.newsFromCache ?? false,
       });
     } catch (e) {
       setScanError(e instanceof Error ? e.message : "Unknown error");
@@ -271,7 +278,13 @@ export default function Dashboard() {
       });
       const news = await res.json();
       if (!res.ok) throw new Error(news.error ?? "News refresh failed");
-      setScanResult(prev => prev ? { ...prev, newsAnalysis: news } : null);
+      setScanResult(prev => prev ? {
+        ...prev,
+        newsAnalysis: news.newsAnalysis ?? news,       // handle both shapes
+        newsHeadlines: news.newsHeadlines ?? prev.newsHeadlines,
+        newsSources: news.newsSources ?? prev.newsSources,
+        newsFromCache: news.newsFromCache ?? false,
+      } : null);
     } catch (e) {
       setScanError(e instanceof Error ? e.message : "Unknown error");
     }
@@ -443,21 +456,13 @@ export default function Dashboard() {
   // ── Sort helpers ────────────────────────────────────────────────────────
   const sortedOpps = (sigs: AISignal[]) => {
     const arr = [...sigs];
-    if (sortOpps === "signal") return arr.sort((a, b) => (SIGNAL_RANK[a.signal] ?? 9) - (SIGNAL_RANK[b.signal] ?? 9));
-    if (sortOpps === "name")   return arr.sort((a, b) => a.ticker.localeCompare(b.ticker));
+    if (sortOpps === "name") return arr.sort((a, b) => a.ticker.localeCompare(b.ticker));
     return arr; // "confidence" — scanner already sorted by confidence desc
   };
 
   const sortedWatch = (items: typeof watching) => {
     const arr = [...items];
     if (sortWatch === "name") return arr.sort((a, b) => a.ticker.localeCompare(b.ticker));
-    if (sortWatch === "score") {
-      return arr.sort((a, b) => {
-        const sa = watchTech[a.ticker]?.compositeScore ?? -1;
-        const sb = watchTech[b.ticker]?.compositeScore ?? -1;
-        return sb - sa;
-      });
-    }
     // "signal" — STRONG_BUY first, unlabeled last
     return arr.sort((a, b) => {
       const sigA = scanResult?.signals.find(s => s.ticker === a.ticker)?.signal ?? watchSignals[a.ticker]?.signal ?? watchTech[a.ticker]?.technicalSignal ?? "ZZZ";
@@ -552,27 +557,84 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* News context panel */}
-            {scanResult?.newsAnalysis && (
+            {/* News context panel — hidden while scanning to avoid overlap with loader */}
+            {scanResult?.newsAnalysis && !scanning && (
               <div style={{ ...cardStyle, marginBottom: 14 }}>
-                <div style={{ ...s_label, marginBottom: 6 }}>Macro Context · Today</div>
+                {/* Header row */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={s_label}>Macro Context · Today</span>
+                    {scanResult.newsFromCache && (
+                      <span style={{ fontSize: 8, color: C.dim, background: C.border2, padding: "1px 6px", borderRadius: 8 }}>
+                        ✓ cached — news unchanged
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setExpandNewsPanel(v => !v)}
+                    style={{ ...btnSt, fontSize: 9, padding: "2px 9px" }}
+                  >
+                    {expandNewsPanel ? "▲ Collapse" : "▼ Expand"}
+                  </button>
+                </div>
+
+                {/* AI summary */}
                 <p style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, margin: "0 0 8px" }}>
                   {scanResult.newsAnalysis.summary}
                 </p>
+
+                {/* Global factor chips */}
                 {scanResult.newsAnalysis.globalFactors.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 8 }}>
                     {scanResult.newsAnalysis.globalFactors.map((f, i) => (
                       <span key={i} style={{ fontSize: 9, color: C.blueText, background: C.blueDim, padding: "2px 7px", borderRadius: 10 }}>{f}</span>
                     ))}
                   </div>
                 )}
+
+                {/* Affected sectors */}
                 {scanResult.newsAnalysis.affectedSectors.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginBottom: expandNewsPanel ? 10 : 0 }}>
                     {scanResult.newsAnalysis.affectedSectors.map((sec, i) => (
                       <div key={i} style={{ fontSize: 10, color: sec.impact === "POSITIVE" ? C.greenText : sec.impact === "NEGATIVE" ? C.redText : C.muted, marginBottom: 2 }}>
                         {sec.impact === "POSITIVE" ? "▲" : sec.impact === "NEGATIVE" ? "▼" : "–"} {sec.sectorName}: {sec.reason}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Expanded section: sources + raw headlines */}
+                {expandNewsPanel && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
+                    {/* Sources */}
+                    {scanResult.newsSources.length > 0 && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+                          News Sources Used
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                          {scanResult.newsSources.map((s, i) => (
+                            <span key={i} style={{ fontSize: 9, color: C.muted, background: "#111", padding: "2px 7px", borderRadius: 6, border: `0.5px solid ${C.border2}` }}>
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Raw headlines */}
+                    {scanResult.newsHeadlines.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+                          Headlines Fed to AI
+                        </div>
+                        {scanResult.newsHeadlines.slice(0, 8).map((h, i) => (
+                          <div key={i} style={{ fontSize: 9, color: C.muted, marginBottom: 3, paddingLeft: 8, borderLeft: `2px solid ${C.border2}`, lineHeight: 1.5 }}>
+                            {h}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -603,7 +665,7 @@ export default function Dashboard() {
               <div style={{ ...cardStyle, textAlign: "center", padding: "30px 20px" }}>
                 <div style={{ fontSize: 24, marginBottom: 10 }}>🔍</div>
                 <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>{scanPhase}</div>
-                <div style={{ fontSize: 10, color: C.dim }}>This takes 30-60 seconds — fetching prices, computing technicals, searching news…</div>
+                <div style={{ fontSize: 10, color: C.dim }}>This takes 30–90 seconds — fetching RSS news, computing RSI/EMA/volume for 30+ stocks, then running AI analysis.</div>
               </div>
             )}
 
@@ -611,13 +673,13 @@ export default function Dashboard() {
             {scanResult && scanResult.signals.length > 1 && (
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
                 <span style={{ fontSize: 9, color: C.dim }}>Sort:</span>
-                {(["confidence", "signal", "name"] as const).map(opt => (
+                {(["confidence", "name"] as const).map(opt => (
                   <button key={opt} onClick={() => setSortOpps(opt)} style={{
                     ...btnSt, fontSize: 9, padding: "2px 9px",
                     background: sortOpps === opt ? C.border2 : "transparent",
                     color: sortOpps === opt ? C.text : C.muted,
                   }}>
-                    {opt === "confidence" ? "Confidence" : opt === "signal" ? "Signal strength" : "Name A–Z"}
+                    {opt === "confidence" ? "AI Confidence" : "Name A–Z"}
                   </button>
                 ))}
               </div>
@@ -889,13 +951,13 @@ export default function Dashboard() {
             {watching.length > 1 && (
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
                 <span style={{ fontSize: 9, color: C.dim }}>Sort:</span>
-                {(["signal", "score", "name"] as const).map(opt => (
+                {(["signal", "name"] as const).map(opt => (
                   <button key={opt} onClick={() => setSortWatch(opt)} style={{
                     ...btnSt, fontSize: 9, padding: "2px 9px",
                     background: sortWatch === opt ? C.border2 : "transparent",
                     color: sortWatch === opt ? C.text : C.muted,
                   }}>
-                    {opt === "signal" ? "Signal strength" : opt === "score" ? "Technical score" : "Name A–Z"}
+                    {opt === "signal" ? "Signal strength" : "Name A–Z"}
                   </button>
                 ))}
               </div>

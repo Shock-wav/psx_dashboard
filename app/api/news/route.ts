@@ -8,8 +8,8 @@ export async function POST(req: NextRequest) {
     if (!provider || !apiKey) {
       return NextResponse.json({ error: "provider and apiKey required" }, { status: 400 });
     }
-    const news = await runNewsRefresh({ provider, apiKey, model });
-    return NextResponse.json(news);
+    const result = await runNewsRefresh({ provider, apiKey, model });
+    return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "News fetch failed" },

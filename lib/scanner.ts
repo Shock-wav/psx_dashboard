@@ -40,6 +40,72 @@ export interface ScanResult {
   passedTechnicals: number;
   signals: AISignal[];
   technicalData: TechnicalScore[]; // for display in UI
+  newsHeadlines: string[];      // top headlines fed to the AI (for transparency)
+  newsSources: string[];        // RSS source names that had articles
+  newsFromCache: boolean;       // true when AI analysis was reused (news unchanged)
+}
+
+// ─── Server-side news cache ────────────────────────────────────────────────
+// Persists across warm Vercel invocations (same process reuse).
+// Prevents the AI from regenerating analysis on unchanged articles,
+// which was the cause of "flickering" macro context on every refresh.
+let _newsCache: {
+  text: string;
+  analysis: NewsAnalysis;
+  headlines: string[];   // normalised for overlap detection
+  sources: string[];
+  at: number;
+} | null = null;
+const NEWS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+function extractHeadlines(text: string, n = 10): string[] {
+  return text.split("\n").slice(0, n).map(l => l.trim()).filter(Boolean);
+}
+
+function extractSources(text: string): string[] {
+  const seen = new Set<string>();
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\[([^\]·]+)/);
+    if (m) seen.add(m[1].trim());
+  }
+  return [...seen];
+}
+
+/** Returns true if at least `threshold` of the top-5 headlines overlap between two lists. */
+function headlinesStillFresh(fresh: string[], cached: string[], threshold = 3): boolean {
+  const cachedSet = new Set(cached.slice(0, 5).map(h => h.slice(0, 70).toLowerCase()));
+  return fresh.slice(0, 5).filter(h => cachedSet.has(h.slice(0, 70).toLowerCase())).length >= threshold;
+}
+
+/**
+ * Fetches fresh RSS, compares headlines to cache, and only re-runs the AI
+ * when the news has meaningfully changed.  Returns the (possibly cached)
+ * NewsAnalysis along with the freshly-parsed headline list and sources.
+ */
+async function getNewsAnalysisWithCache(config: ProviderConfig): Promise<{
+  newsAnalysis: NewsAnalysis;
+  newsHeadlines: string[];
+  newsSources: string[];
+  fromCache: boolean;
+}> {
+  const rawNews = await fetchPakistanNews();
+  const headlines = extractHeadlines(rawNews, 10);
+  const sources = extractSources(rawNews);
+
+  // If the cache is alive AND headlines haven't substantially changed → reuse
+  if (_newsCache) {
+    const cacheAlive = Date.now() - _newsCache.at < NEWS_CACHE_TTL_MS;
+    const newsUnchanged = headlinesStillFresh(headlines, _newsCache.headlines);
+    if (cacheAlive || newsUnchanged) {
+      _newsCache.at = Date.now(); // bump TTL
+      return { newsAnalysis: _newsCache.analysis, newsHeadlines: headlines, newsSources: sources, fromCache: true };
+    }
+  }
+
+  // Headlines changed significantly — run AI analysis on fresh news
+  const newsAnalysis = await getNewsAnalysis(config, rawNews);
+  _newsCache = { text: rawNews, analysis: newsAnalysis, headlines, sources, at: Date.now() };
+  return { newsAnalysis, newsHeadlines: headlines, newsSources: sources, fromCache: false };
 }
 
 interface ScanOptions {
@@ -127,18 +193,22 @@ export async function runFullScan(
     skipNewsPass = false,
   } = options;
 
-  // --- Pass 1: Free RSS news fetch → AI sector analysis ---
+  // --- Pass 1: Free RSS news fetch → AI sector analysis (with cache) ---
   let newsAnalysis: NewsAnalysis = {
     summary: "News scan skipped.",
     affectedSectors: [],
     globalFactors: [],
   };
+  let newsHeadlines: string[] = [];
+  let newsSources: string[] = [];
+  let newsFromCache = false;
 
   if (!skipNewsPass) {
-    // Fetch Pakistan news from free RSS feeds (Dawn, Geo, Profit Pakistan)
-    const rawNews = await fetchPakistanNews();
-    // AI reasons over headlines — no web search needed
-    newsAnalysis = await getNewsAnalysis(providerConfig, rawNews);
+    const newsResult = await getNewsAnalysisWithCache(providerConfig);
+    newsAnalysis = newsResult.newsAnalysis;
+    newsHeadlines = newsResult.newsHeadlines;
+    newsSources = newsResult.newsSources;
+    newsFromCache = newsResult.fromCache;
   }
 
   // Determine sector expansion
@@ -213,13 +283,16 @@ export async function runFullScan(
     passedTechnicals: scoredStocks.length,
     signals,
     technicalData: scoredStocks,
+    newsHeadlines,
+    newsSources,
+    newsFromCache,
   };
 }
 
-/** Lightweight news-only refresh (Pass 1 only, no stock fetch). */
+/** Lightweight news-only refresh (Pass 1 only, no stock fetch). Uses same cache. */
 export async function runNewsRefresh(
   providerConfig: ProviderConfig
-): Promise<NewsAnalysis> {
-  const rawNews = await fetchPakistanNews();
-  return getNewsAnalysis(providerConfig, rawNews);
+): Promise<{ newsAnalysis: NewsAnalysis; newsHeadlines: string[]; newsSources: string[]; newsFromCache: boolean }> {
+  const r = await getNewsAnalysisWithCache(providerConfig);
+  return { newsAnalysis: r.newsAnalysis, newsHeadlines: r.newsHeadlines, newsSources: r.newsSources, newsFromCache: r.fromCache };
 }
