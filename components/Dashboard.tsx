@@ -127,74 +127,128 @@ const btnSt: React.CSSProperties = { fontSize: 10, padding: "4px 10px", borderRa
 const accentBtn: React.CSSProperties = { ...btnSt, borderColor: C.green + "80", color: C.greenText };
 const dangerBtn: React.CSSProperties = { ...btnSt, borderColor: C.amber + "60", color: C.amberText };
 
-// ─── Holdings sector pie/donut chart (pure SVG, zero dependencies) ─────────
+// ─── Holdings breakdown chart (pure SVG, zero dependencies) ──────────────
 const PIE_COLORS = [C.green, C.blue, C.amber, C.purple, "#c08060", "#60b0c0", "#a0c060", "#c060a0"];
+
+/** Build an SVG donut path. Handles the full-circle (100%) edge case by
+ *  splitting into two 180° arcs — identical start/end breaks SVG arc rendering. */
+function donutPath(cx: number, cy: number, R: number, ir: number, a0: number, frac: number): string {
+  if (frac >= 0.9999) {
+    const mid = a0 + Math.PI;
+    const [x0,y0,xm,ym] = [cx+R*Math.cos(a0), cy+R*Math.sin(a0), cx+R*Math.cos(mid), cy+R*Math.sin(mid)];
+    const [ix0,iy0,ixm,iym] = [cx+ir*Math.cos(a0), cy+ir*Math.sin(a0), cx+ir*Math.cos(mid), cy+ir*Math.sin(mid)];
+    return [
+      `M ${x0.toFixed(2)} ${y0.toFixed(2)}`,
+      `A ${R} ${R} 0 1 1 ${xm.toFixed(2)} ${ym.toFixed(2)}`,
+      `A ${R} ${R} 0 1 1 ${x0.toFixed(2)} ${y0.toFixed(2)}`,
+      `L ${ix0.toFixed(2)} ${iy0.toFixed(2)}`,
+      `A ${ir} ${ir} 0 1 0 ${ixm.toFixed(2)} ${iym.toFixed(2)}`,
+      `A ${ir} ${ir} 0 1 0 ${ix0.toFixed(2)} ${iy0.toFixed(2)}`,
+      "Z",
+    ].join(" ");
+  }
+  const a1 = a0 + frac * 2 * Math.PI;
+  const large = frac > 0.5 ? 1 : 0;
+  return [
+    `M ${(cx+R*Math.cos(a0)).toFixed(2)} ${(cy+R*Math.sin(a0)).toFixed(2)}`,
+    `A ${R} ${R} 0 ${large} 1 ${(cx+R*Math.cos(a1)).toFixed(2)} ${(cy+R*Math.sin(a1)).toFixed(2)}`,
+    `L ${(cx+ir*Math.cos(a1)).toFixed(2)} ${(cy+ir*Math.sin(a1)).toFixed(2)}`,
+    `A ${ir} ${ir} 0 ${large} 0 ${(cx+ir*Math.cos(a0)).toFixed(2)} ${(cy+ir*Math.sin(a0)).toFixed(2)}`,
+    "Z",
+  ].join(" ");
+}
 
 interface HoldingForPie { ticker: string; name: string; shares: number; avgPrice: number; }
 function HoldingsPieChart({ holdings, prices }: {
   holdings: HoldingForPie[];
   prices: Record<string, { currentPrice?: number }>;
 }) {
-  // Accumulate value by sector (parse from "TICKER · Sector Name")
-  const sectorValues: Record<string, number> = {};
+  if (holdings.length === 0) return null;
+
+  // Per-company values
   let total = 0;
-  for (const h of holdings) {
-    const liveP = prices[h.ticker]?.currentPrice;
-    const val = (liveP ?? h.avgPrice) * h.shares;
-    const sector = h.name.includes(" · ") ? h.name.split(" · ").slice(1).join(" · ") : h.ticker;
-    sectorValues[sector] = (sectorValues[sector] ?? 0) + val;
+  const compEntries = holdings.map(h => {
+    const val = (prices[h.ticker]?.currentPrice ?? h.avgPrice) * h.shares;
     total += val;
+    return { ticker: h.ticker, name: h.name, val };
+  }).sort((a, b) => b.val - a.val);
+  if (total === 0) return null;
+
+  // Per-sector values
+  const sectorMap: Record<string, number> = {};
+  for (const h of holdings) {
+    const val = (prices[h.ticker]?.currentPrice ?? h.avgPrice) * h.shares;
+    const sector = h.name.includes(" · ") ? h.name.split(" · ").slice(1).join(" · ") : "Other";
+    sectorMap[sector] = (sectorMap[sector] ?? 0) + val;
   }
-  if (total === 0 || Object.keys(sectorValues).length === 0) return null;
+  const sectorEntries = Object.entries(sectorMap).sort((a, b) => b[1] - a[1]);
 
-  const entries = Object.entries(sectorValues).sort((a, b) => b[1] - a[1]);
+  // Donut uses companies as slices
   const cx = 55, cy = 55, R = 46, ir = 26;
-
-  let angle = -Math.PI / 2; // start from 12-o'clock
-  const slices = entries.map(([sector, val], i) => {
-    const frac = val / total;
-    const sweep = frac * 2 * Math.PI;
-    const a0 = angle, a1 = angle + sweep;
-    angle = a1;
-    const large = frac > 0.5 ? 1 : 0;
-    const cos0 = Math.cos(a0), sin0 = Math.sin(a0);
-    const cos1 = Math.cos(a1), sin1 = Math.sin(a1);
-    const d = [
-      `M ${(cx + R * cos0).toFixed(2)} ${(cy + R * sin0).toFixed(2)}`,
-      `A ${R} ${R} 0 ${large} 1 ${(cx + R * cos1).toFixed(2)} ${(cy + R * sin1).toFixed(2)}`,
-      `L ${(cx + ir * cos1).toFixed(2)} ${(cy + ir * sin1).toFixed(2)}`,
-      `A ${ir} ${ir} 0 ${large} 0 ${(cx + ir * cos0).toFixed(2)} ${(cy + ir * sin0).toFixed(2)}`,
-      "Z",
-    ].join(" ");
-    return { d, sector, val, frac, color: PIE_COLORS[i % PIE_COLORS.length] };
+  let angle = -Math.PI / 2;
+  const slices = compEntries.map((e, i) => {
+    const frac = e.val / total;
+    const d = donutPath(cx, cy, R, ir, angle, frac);
+    angle += frac * 2 * Math.PI;
+    return { ...e, frac, d, color: PIE_COLORS[i % PIE_COLORS.length] };
   });
 
+  const partial = holdings.some(h => !prices[h.ticker]?.currentPrice);
+
   return (
-    <div style={{ background: "#111", borderRadius: 8, padding: "10px 14px", marginBottom: 14, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-      <svg width={110} height={110} viewBox="0 0 110 110" style={{ flexShrink: 0 }}>
-        {slices.map((s, i) => (
-          <path key={i} d={s.d} fill={s.color} opacity={0.85} stroke={C.bg} strokeWidth={1.5} />
-        ))}
-        {/* Centre label */}
-        <text x={cx} y={cy - 4} textAnchor="middle" fill={C.muted} fontSize={8}>Portfolio</text>
-        <text x={cx} y={cy + 8} textAnchor="middle" fill={C.text} fontSize={9} fontWeight="600">
-          {entries.length} sector{entries.length !== 1 ? "s" : ""}
-        </text>
-      </svg>
-      <div style={{ flex: 1, minWidth: 120 }}>
-        <div style={{ ...s_label, marginBottom: 6 }}>Sector Breakdown</div>
-        {slices.map((s, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0, display: "inline-block" }} />
-            <span style={{ fontSize: 10, color: C.muted, flex: 1, lineHeight: 1.3 }}>{s.sector}</span>
-            <span style={{ fontSize: 10, color: C.text, fontWeight: 500, whiteSpace: "nowrap" }}>
-              {(s.frac * 100).toFixed(1)}%
-            </span>
+    <div style={{ background: "#111", borderRadius: 8, padding: "12px 14px", marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
+        {/* Donut */}
+        <svg width={110} height={110} viewBox="0 0 110 110" style={{ flexShrink: 0 }}>
+          {slices.map((s, i) => (
+            <path key={i} d={s.d} fill={s.color} opacity={0.85} stroke={C.bg} strokeWidth={1.5} />
+          ))}
+          <text x={cx} y={cy - 3} textAnchor="middle" fill={C.dim} fontSize={8}>Portfolio</text>
+          <text x={cx} y={cy + 9} textAnchor="middle" fill={C.text} fontSize={9} fontWeight="600">
+            PKR {total >= 1_000_000 ? `${(total/1_000_000).toFixed(1)}M` : `${Math.round(total/1000)}K`}
+          </text>
+        </svg>
+
+        {/* Breakdowns */}
+        <div style={{ flex: 1, minWidth: 160 }}>
+          {/* Companies */}
+          <div style={{ ...s_label, marginBottom: 5 }}>Companies</div>
+          {slices.map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0, display: "inline-block" }} />
+              <span style={{ fontSize: 10, fontWeight: 500, color: C.text, minWidth: 36 }}>{s.ticker}</span>
+              <div style={{ flex: 1, height: 2, background: C.border2, borderRadius: 1 }}>
+                <div style={{ width: `${s.frac * 100}%`, height: 2, background: s.color, borderRadius: 1 }} />
+              </div>
+              <span style={{ fontSize: 10, color: C.text, fontWeight: 500, minWidth: 38, textAlign: "right" }}>
+                {(s.frac * 100).toFixed(1)}%
+              </span>
+            </div>
+          ))}
+
+          {/* Sectors — only show when >1 company maps to a sector */}
+          {sectorEntries.length > 0 && (
+            <div style={{ marginTop: 10, paddingTop: 8, borderTop: `0.5px solid ${C.border}` }}>
+              <div style={{ ...s_label, marginBottom: 5 }}>Sectors</div>
+              {sectorEntries.map(([sector, val], i) => {
+                const frac = val / total;
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0, display: "inline-block" }} />
+                    <span style={{ fontSize: 10, color: C.muted, flex: 1, lineHeight: 1.3 }}>{sector}</span>
+                    <span style={{ fontSize: 10, color: C.text, fontWeight: 500, minWidth: 38, textAlign: "right" }}>
+                      {(frac * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ marginTop: 8, fontSize: 9, color: C.dim }}>
+            Total: PKR {Math.round(total).toLocaleString()}
+            {partial && " · prices partially loading"}
           </div>
-        ))}
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: `0.5px solid ${C.border}`, fontSize: 9, color: C.dim }}>
-          Total value: PKR {Math.round(total).toLocaleString()}
-          {holdings.some(h => !prices[h.ticker]?.currentPrice) && " (partial — some prices loading)"}
         </div>
       </div>
     </div>
@@ -703,49 +757,89 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* Expanded section: sources + parsed headlines */}
+                {/* Expanded section: deep-dive on each driver from the summary */}
                 {expandNewsPanel && (
                   <div style={{ marginTop: 10, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
-                    {/* Sources pills */}
-                    {scanResult.newsSources.length > 0 && (
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>
-                          Finance news sources · all headlines pre-filtered for market relevance
+
+                    {/* ── Why each sector is moving ── */}
+                    {scanResult.newsAnalysis.affectedSectors.filter(s => s.impact !== "NEUTRAL").length > 0 && (
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                          What's driving today's market — sector by sector
                         </div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                          {scanResult.newsSources.map((src, i) => (
-                            <span key={i} style={{ fontSize: 9, color: C.blueText, background: C.blueDim, padding: "2px 8px", borderRadius: 6, border: `0.5px solid ${C.blue}40` }}>
-                              {src}
-                            </span>
-                          ))}
-                        </div>
+                        {scanResult.newsAnalysis.affectedSectors
+                          .filter(s => s.impact !== "NEUTRAL")
+                          .map((sec, i) => {
+                            const isPos = sec.impact === "POSITIVE";
+                            const col   = isPos ? C.greenText : C.redText;
+                            const bg    = isPos ? C.greenDim  : C.redDim;
+                            const bdr   = isPos ? C.green     : C.red;
+                            return (
+                              <div key={i} style={{ background: bg, border: `0.5px solid ${bdr}30`, borderRadius: 6, padding: "8px 10px", marginBottom: 6 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: col }}>
+                                    {isPos ? "▲" : "▼"} {sec.sectorName}
+                                  </span>
+                                  <span style={{ fontSize: 8, color: col, background: `${bdr}20`, padding: "1px 6px", borderRadius: 8, fontWeight: 600 }}>
+                                    {sec.impact}
+                                  </span>
+                                </div>
+                                <p style={{ fontSize: 10, color: C.muted, margin: 0, lineHeight: 1.6 }}>
+                                  {sec.reason}
+                                </p>
+                              </div>
+                            );
+                          })}
                       </div>
                     )}
 
-                    {/* Headlines — parsed into source badge + clean title */}
+                    {/* ── Global macro factors ── */}
+                    {scanResult.newsAnalysis.globalFactors.length > 0 && (
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                          Global factors in play
+                        </div>
+                        {scanResult.newsAnalysis.globalFactors.map((f, i) => (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                            <span style={{ width: 4, height: 4, borderRadius: "50%", background: C.blue, flexShrink: 0, display: "inline-block" }} />
+                            <span style={{ fontSize: 10, color: C.blueText }}>{f}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* ── Source headlines (transparency) ── */}
                     {scanResult.newsHeadlines.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
-                          Top market headlines fed to AI ({scanResult.newsHeadlines.length} of most recent)
+                      <div style={{ paddingTop: 8, borderTop: `0.5px solid ${C.border}` }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                          <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            Raw headlines that informed the above analysis
+                          </div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, justifyContent: "flex-end" }}>
+                            {scanResult.newsSources.map((src, i) => (
+                              <span key={i} style={{ fontSize: 8, color: C.dim, background: "#161616", border: `0.5px solid ${C.border2}`, borderRadius: 4, padding: "1px 5px" }}>
+                                {src}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                         {scanResult.newsHeadlines.slice(0, 10).map((raw, i) => {
-                          // Parse "[Source · Date] Title — desc" format
                           const m = raw.match(/^\[([^\]·]+?)(?:\s*·\s*([^\]]+))?\]\s*(.+?)(?:\s*—.*)?$/);
                           const src   = m ? m[1].trim() : "";
                           const title = m ? m[3].trim() : raw;
                           return (
-                            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 7, marginBottom: 6, paddingLeft: 0 }}>
+                            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 7, marginBottom: 5 }}>
                               {src && (
-                                <span style={{ fontSize: 8, color: C.dim, background: "#161616", border: `0.5px solid ${C.border2}`, borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap", marginTop: 1, flexShrink: 0 }}>
+                                <span style={{ fontSize: 8, color: C.dim, background: "#161616", border: `0.5px solid ${C.border2}`, borderRadius: 3, padding: "1px 5px", whiteSpace: "nowrap", marginTop: 2, flexShrink: 0 }}>
                                   {src}
                                 </span>
                               )}
-                              <span style={{ fontSize: 10, color: C.muted, lineHeight: 1.5, flex: 1 }}>{title}</span>
+                              <span style={{ fontSize: 10, color: C.muted, lineHeight: 1.5 }}>{title}</span>
                             </div>
                           );
                         })}
-                        <div style={{ fontSize: 8, color: C.dim, marginTop: 4 }}>
-                          ✓ Non-finance content (sports, politics, entertainment) filtered before AI analysis
+                        <div style={{ fontSize: 8, color: C.dim, marginTop: 6 }}>
+                          ✓ Non-finance content filtered before AI analysis
                         </div>
                       </div>
                     )}
