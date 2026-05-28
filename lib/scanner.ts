@@ -44,6 +44,7 @@ export interface ScanResult {
   newsHeadlines: string[];      // top headlines fed to the AI (for transparency)
   newsSources: string[];        // RSS source names that had articles
   newsFromCache: boolean;       // true when AI analysis was reused (news unchanged)
+  fundamentals: Record<string, import("./askanalyst").AskAnalystFundamentals>; // keyed by ticker
 }
 
 // ─── Sector-rep tickers for fundamentals context injected into AI prompt ──
@@ -340,6 +341,12 @@ export async function runFullScan(
       .slice(0, maxPicks);
   }
 
+  // Convert fundamentals map to plain record for JSON serialization
+  const fundamentalsRecord: Record<string, import("./askanalyst").AskAnalystFundamentals> = {};
+  if (fundamentalsMap) {
+    fundamentalsMap.forEach((v, k) => { fundamentalsRecord[k] = v; });
+  }
+
   return {
     timestamp: new Date().toISOString(),
     newsAnalysis,
@@ -351,6 +358,7 @@ export async function runFullScan(
     newsHeadlines,
     newsSources,
     newsFromCache,
+    fundamentals: fundamentalsRecord,
   };
 }
 

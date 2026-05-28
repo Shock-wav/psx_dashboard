@@ -876,9 +876,9 @@ export default function Dashboard() {
       const newSignals: AISignal[] = data.signals ?? [];
       // Register scan tickers so the prices hook fetches them on next tick
       scanTickersRef.current = newSignals.map((s: AISignal) => s.ticker);
-      // Fetch fundamentals for all scan result tickers in background
-      if (newSignals.length > 0) {
-        fetchAskAnalystBatch(newSignals.map((s: AISignal) => s.ticker));
+      // Fundamentals come back in the scan response — merge directly (no extra fetch needed)
+      if (data.fundamentals && Object.keys(data.fundamentals).length > 0) {
+        setAskAnalystData(prev => ({ ...prev, ...data.fundamentals }));
       }
       setScanResult({
         signals: newSignals,
