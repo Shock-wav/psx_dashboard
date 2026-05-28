@@ -83,10 +83,8 @@ function FundamentalsRow({ f }: { f: AskAnalystFundamentals | undefined }) {
 
   return (
     <div style={{ marginTop: 10, paddingTop: 8, borderTop: `0.5px solid ${C.border}` }}>
+      <div style={{ fontSize: 8, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>Fundamentals</div>
       <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ fontSize: 8, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 2 }}>
-          Fundamentals
-        </span>
         {chips.map(([lbl, val, col]) => (
           <div key={lbl} style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 4, alignItems: "center" }}>
             <span style={{ fontSize: 8, color: C.dim }}>{lbl}</span>
@@ -320,6 +318,50 @@ function MetricsGuide({ open, onClose }: { open: boolean; onClose: () => void })
 }
 
 // ─── Signal detail popup ────────────────────────────────────────────────────
+function buildSignalNarrative(data: { tech?: StockTechLocal; fundamentals?: AskAnalystFundamentals }): { technical: string; valuation: string } {
+  const { tech, fundamentals } = data;
+  let technical = "";
+  if (tech) {
+    if (tech.rsi < 35)      technical += `RSI at ${tech.rsi.toFixed(0)} is deeply oversold — a potential reversal zone. `;
+    else if (tech.rsi < 50) technical += `RSI at ${tech.rsi.toFixed(0)} sits below midpoint — mild oversold conditions with upside room. `;
+    else if (tech.rsi < 65) technical += `RSI at ${tech.rsi.toFixed(0)} shows healthy momentum without being overbought. `;
+    else                    technical += `RSI at ${tech.rsi.toFixed(0)} is approaching overbought — timing of entry is critical. `;
+
+    const above20 = tech.priceVsEma20 === "above";
+    const above50 = (tech.priceVsEma50 ?? tech.priceVsEma20) === "above";
+    if (above20 && above50)
+      technical += `Price holds above both EMA20 (${tech.ema20.toFixed(0)}) and EMA50 (${tech.ema50.toFixed(0)}), confirming a clean uptrend. `;
+    else if (above20)
+      technical += `Price has reclaimed EMA20 (${tech.ema20.toFixed(0)}) but EMA50 (${tech.ema50.toFixed(0)}) is still overhead — watch for full confirmation. `;
+    else
+      technical += `Price is below EMA20 (${tech.ema20.toFixed(0)}) and EMA50 (${tech.ema50.toFixed(0)}) — trend is bearish, monitor for a reclaim before entry. `;
+
+    if (tech.volumeRatio >= 2.0)      technical += `Volume surging at ${tech.volumeRatio.toFixed(1)}× the 20-day average — strong conviction behind the move.`;
+    else if (tech.volumeRatio >= 1.3) technical += `Volume at ${tech.volumeRatio.toFixed(1)}× average confirms above-normal participation.`;
+    else if (tech.volumeRatio >= 0.8) technical += `Volume is at ${tech.volumeRatio.toFixed(1)}× average — normal activity levels.`;
+    else                              technical += `Volume thin at ${tech.volumeRatio.toFixed(1)}× average — limited conviction; wait for a pickup.`;
+  }
+
+  let valuation = "";
+  if (fundamentals) {
+    const f = fundamentals;
+    if (f.pe !== null) {
+      if (f.pe < 0)         valuation += `The company is currently loss-making (negative PE). `;
+      else if (f.pe < 8)    valuation += `At PE ${f.pe.toFixed(1)}×, the stock is trading at a meaningful discount to the PSX average — a potentially undervalued setup. `;
+      else if (f.pe < 15)   valuation += `PE of ${f.pe.toFixed(1)}× sits within fair-value range for PSX. `;
+      else                  valuation += `PE of ${f.pe.toFixed(1)}× is above the PSX norm — growth expectations are already priced in. `;
+    }
+    if (f.dividendYield !== null && f.dividendYield >= 3)
+      valuation += `The ${f.dividendYield.toFixed(1)}% dividend yield adds an income buffer to the position. `;
+    if (f.totalReturn1Y !== null) {
+      if (f.totalReturn1Y > 20)      valuation += `The stock has returned +${f.totalReturn1Y.toFixed(0)}% over the past year, reflecting sustained market interest.`;
+      else if (f.totalReturn1Y > 0)  valuation += `With a +${f.totalReturn1Y.toFixed(0)}% 1-year return, the medium-term trend remains constructive.`;
+      else                           valuation += `The stock is down ${Math.abs(f.totalReturn1Y).toFixed(0)}% over 12 months — contrarian setup if technicals confirm a reversal.`;
+    }
+  }
+  return { technical, valuation };
+}
+
 interface SignalDetail {
   ticker: string;
   signal?: string;
@@ -344,17 +386,14 @@ function SignalDetailModal({ data, onClose }: { data: SignalDetail; onClose: () 
 
   const { ticker, signal, confidence, reason, newsHeadline, catalysts, risks, suggestedEntry, tech, fundamentals, currentPrice, changePercent } = data;
   const pillStyle = PILL_MAP[signal?.toUpperCase() ?? ""] ?? PILL_MAP.WATCH;
-
-  const pos52w = fundamentals?.fiftyTwoWeekHigh && fundamentals?.fiftyTwoWeekLow && fundamentals.fiftyTwoWeekHigh > fundamentals.fiftyTwoWeekLow
-    ? Math.round(((fundamentals.currentPrice - fundamentals.fiftyTwoWeekLow) / (fundamentals.fiftyTwoWeekHigh - fundamentals.fiftyTwoWeekLow)) * 100)
-    : null;
+  const narrative = buildSignalNarrative({ tech, fundamentals });
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 12px" }}>
       <div onClick={e => e.stopPropagation()} style={{ background: C.card, border: `0.5px solid ${C.border2}`, borderRadius: 10, padding: "16px 18px", width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto" }}>
 
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 18, fontWeight: 700 }}>{ticker}</span>
             {signal && (
@@ -374,12 +413,16 @@ function SignalDetailModal({ data, onClose }: { data: SignalDetail; onClose: () 
           <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 18 }}>×</button>
         </div>
 
-        {/* AI reason */}
-        {reason && <p style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, margin: "0 0 10px" }}>{reason}</p>}
+        {/* AI reason as a highlighted headline */}
+        {reason && (
+          <p style={{ fontSize: 12, color: C.text, lineHeight: 1.5, margin: "0 0 10px", borderLeft: `2px solid ${pillStyle.border}`, paddingLeft: 9, fontStyle: "italic" }}>
+            {reason}
+          </p>
+        )}
 
         {/* Confidence bar */}
         {confidence !== undefined && (
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
               <span style={{ fontSize: 9, color: C.dim }}>AI Confidence</span>
               <span style={{ fontSize: 9, color: C.muted }}>{confidence}%</span>
@@ -390,86 +433,58 @@ function SignalDetailModal({ data, onClose }: { data: SignalDetail; onClose: () 
           </div>
         )}
 
-        {/* News headline */}
+        {/* Technical setup narrative */}
+        {narrative.technical && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 5 }}>Technical Setup</div>
+            <p style={{ fontSize: 11, color: C.muted, lineHeight: 1.75, margin: 0 }}>{narrative.technical}</p>
+          </div>
+        )}
+
+        {/* Valuation narrative */}
+        {narrative.valuation && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 5 }}>Valuation</div>
+            <p style={{ fontSize: 11, color: C.muted, lineHeight: 1.75, margin: 0 }}>{narrative.valuation}</p>
+          </div>
+        )}
+
+        {/* News catalyst */}
         {newsHeadline && newsHeadline !== "No recent news" && (
-          <div style={{ fontSize: 10, color: C.dim, fontStyle: "italic", marginBottom: 10 }}>📰 {newsHeadline}</div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 5 }}>News Catalyst</div>
+            <div style={{ fontSize: 11, color: C.blueText, fontStyle: "italic" }}>📰 {newsHeadline}</div>
+          </div>
         )}
 
         {/* Catalysts + Risks */}
         {((catalysts?.length ?? 0) > 0 || (risks?.length ?? 0) > 0) && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
             {(catalysts?.length ?? 0) > 0 && (
               <div>
-                <div style={{ fontSize: 9, color: C.greenText, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Why it works</div>
-                {catalysts!.map((c, i) => <div key={i} style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>▲ {c}</div>)}
+                <div style={{ fontSize: 9, color: C.greenText, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>Why it works</div>
+                {catalysts!.map((c, i) => <div key={i} style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>✓ {c}</div>)}
               </div>
             )}
             {(risks?.length ?? 0) > 0 && (
               <div>
-                <div style={{ fontSize: 9, color: C.redText, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Risks</div>
-                {risks!.map((r, i) => <div key={i} style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>▼ {r}</div>)}
+                <div style={{ fontSize: 9, color: C.redText, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>Watch out for</div>
+                {risks!.map((r, i) => <div key={i} style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>⚠ {r}</div>)}
               </div>
             )}
-          </div>
-        )}
-
-        {/* Technical indicators */}
-        {tech && (
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Technical Indicators</div>
-            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-              {([
-                ["RSI", tech.rsi.toFixed(0), tech.rsi < 30 ? C.greenText : tech.rsi > 70 ? C.redText : C.muted],
-                ["EMA20", tech.ema20.toFixed(2), C.muted],
-                ["EMA50", tech.ema50.toFixed(2), C.muted],
-                ["Vol", `${tech.volumeRatio.toFixed(1)}x avg`, tech.volumeRatio >= 1.5 ? C.greenText : C.muted],
-                ["Score", `${tech.compositeScore}/100`, tech.compositeScore >= 60 ? C.greenText : tech.compositeScore >= 40 ? C.amberText : C.redText],
-                ["Trend", tech.priceVsEma20 === "above" && tech.priceVsEma50 === "above" ? "Uptrend" : tech.priceVsEma20 === "below" && tech.priceVsEma50 === "below" ? "Downtrend" : "Mixed",
-                  tech.priceVsEma20 === "above" && tech.priceVsEma50 === "above" ? C.greenText : tech.priceVsEma20 === "below" && tech.priceVsEma50 === "below" ? C.redText : C.amberText],
-              ] as [string, string, string][]).map(([lbl, val, col]) => (
-                <div key={lbl} style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4, alignItems: "center" }}>
-                  <span style={{ fontSize: 8, color: C.dim }}>{lbl}</span>
-                  <span style={{ fontSize: 10, fontWeight: 500, color: col }}>{val}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Fundamentals */}
-        {fundamentals && (
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Fundamental Data</div>
-            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
-              {fundamentals.pe !== null && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>P/E</span><span style={{ fontSize: 10, fontWeight: 500, color: fundamentals.pe < 8 ? C.greenText : fundamentals.pe > 20 ? C.amberText : C.text }}>{fundamentals.pe.toFixed(1)}x</span></div>}
-              {fundamentals.pbv !== null && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>PBV</span><span style={{ fontSize: 10, fontWeight: 500, color: C.muted }}>{fundamentals.pbv.toFixed(1)}x</span></div>}
-              {fundamentals.dividendYield !== null && fundamentals.dividendYield > 0 && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>Div</span><span style={{ fontSize: 10, fontWeight: 500, color: C.greenText }}>{fundamentals.dividendYield.toFixed(1)}%</span></div>}
-              {fundamentals.totalReturn1M !== null && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>1M</span><span style={{ fontSize: 10, fontWeight: 500, color: fundamentals.totalReturn1M >= 0 ? C.greenText : C.redText }}>{fundamentals.totalReturn1M >= 0 ? "+" : ""}{fundamentals.totalReturn1M.toFixed(1)}%</span></div>}
-              {fundamentals.totalReturn1Y !== null && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>1Y</span><span style={{ fontSize: 10, fontWeight: 500, color: fundamentals.totalReturn1Y >= 0 ? C.greenText : C.redText }}>{fundamentals.totalReturn1Y >= 0 ? "+" : ""}{fundamentals.totalReturn1Y.toFixed(1)}%</span></div>}
-              {pos52w !== null && (
-                <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 5, alignItems: "center" }}>
-                  <span style={{ fontSize: 8, color: C.dim }}>52W</span>
-                  <div style={{ width: 40, height: 3, background: C.border2, borderRadius: 2, position: "relative" }}>
-                    <div style={{ position: "absolute", left: 0, top: 0, width: `${pos52w}%`, height: 3, borderRadius: 2, background: pos52w > 70 ? C.green : pos52w < 30 ? C.red : C.amber }} />
-                  </div>
-                  <span style={{ fontSize: 9, color: C.muted }}>{pos52w}%</span>
-                </div>
-              )}
-              {fundamentals.marketCap !== null && fundamentals.marketCap > 0 && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>MCap</span><span style={{ fontSize: 10, fontWeight: 500, color: C.muted }}>{fundamentals.marketCap >= 1000 ? `${(fundamentals.marketCap / 1000).toFixed(0)}B` : `${Math.round(fundamentals.marketCap)}M`}</span></div>}
-            </div>
           </div>
         )}
 
         {/* Suggested entry */}
         {suggestedEntry && (
-          <div style={{ background: C.amberDim, border: `0.5px solid ${C.amber}40`, borderRadius: 6, padding: "6px 10px", display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ fontSize: 9, color: C.dim }}>Suggested entry</span>
-            <span style={{ fontSize: 11, fontWeight: 600, color: C.amberText }}>{suggestedEntry}</span>
+          <div style={{ background: C.amberDim, border: `0.5px solid ${C.amber}40`, borderRadius: 6, padding: "7px 12px", display: "flex", gap: 10, alignItems: "center" }}>
+            <span style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4 }}>Suggested entry</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.amberText }}>{suggestedEntry}</span>
           </div>
         )}
 
         <div style={{ marginTop: 12, fontSize: 9, color: C.dim }}>
-          Fundamentals sourced from askanalyst.com.pk · Technical analysis from PSX price history · Not financial advice
+          Fundamentals from askanalyst.com.pk · Technicals from PSX price history · Not financial advice
         </div>
       </div>
     </div>
@@ -1060,6 +1075,12 @@ export default function Dashboard() {
     );
     setHoldingTech(prev => ({ ...prev, ...results }));
   }, [holdings]); // eslint-disable-line
+
+  // Fetch fundamentals for scan result tickers whenever a new scan lands
+  useEffect(() => {
+    if (!scanResult?.signals.length) return;
+    fetchAskAnalystBatch(scanResult.signals.map(s => s.ticker));
+  }, [scanResult?.timestamp]); // eslint-disable-line
 
   // On first mount: load fundamentals for all existing watchlist + holdings tickers
   useEffect(() => {
