@@ -118,6 +118,206 @@ function FundamentalsRow({ f }: { f: AskAnalystFundamentals | undefined }) {
   );
 }
 
+// ─── Metrics Guide modal ────────────────────────────────────────────────────
+const TECH_GUIDE = [
+  {
+    name: "RSI",
+    full: "Relative Strength Index",
+    desc: "Momentum oscillator measuring speed and size of recent price moves. Scale: 0–100.",
+    bands: [
+      { range: "< 30",   label: "Deeply oversold — reversal zone",   col: C.greenText  },
+      { range: "30–45",  label: "Oversold — good entry territory",    col: C.greenText  },
+      { range: "45–60",  label: "Neutral — room to run",              col: C.muted      },
+      { range: "60–70",  label: "Approaching overbought",             col: C.amberText  },
+      { range: "> 70",   label: "Overbought — avoid chasing",         col: C.redText    },
+    ],
+  },
+  {
+    name: "EMA20 / EMA50",
+    full: "Exponential Moving Averages",
+    desc: "Trend-following lines that weight recent prices more heavily. EMA20 = short-term (4 wks), EMA50 = medium-term (10 wks).",
+    bands: [
+      { range: "Price > both",  label: "Strong uptrend — most bullish",      col: C.greenText },
+      { range: "Price > EMA20", label: "Short-term bullish",                  col: C.greenText },
+      { range: "Price < both",  label: "Downtrend — avoid or wait",           col: C.redText   },
+      { range: "Golden cross",  label: "EMA20 crosses above EMA50 — buy signal", col: C.greenText },
+      { range: "Death cross",   label: "EMA20 crosses below EMA50 — sell signal", col: C.redText },
+    ],
+  },
+  {
+    name: "Vol",
+    full: "Volume Ratio (today vs 20-day avg)",
+    desc: "Compares today's traded volume to the 20-day average. High volume on a price move confirms conviction.",
+    bands: [
+      { range: "> 2.0×",    label: "Strong buying interest — high conviction", col: C.greenText },
+      { range: "1.3–2.0×",  label: "Above-average activity",                   col: C.greenText },
+      { range: "0.8–1.3×",  label: "Normal participation",                     col: C.muted     },
+      { range: "< 0.8×",    label: "Thin market — weak conviction",            col: C.redText   },
+    ],
+  },
+  {
+    name: "Score",
+    full: "Composite Technical Score",
+    desc: "Weighted combination of RSI (30 pts), EMA trend (25 pts), EMA crossover (25 pts), and volume (20 pts).",
+    bands: [
+      { range: "75–100", label: "STRONG BUY",                    col: C.greenText },
+      { range: "50–74",  label: "BUY — technically sound",       col: C.greenText },
+      { range: "30–49",  label: "NEUTRAL — watch closely",       col: C.amberText },
+      { range: "0–29",   label: "AVOID — weak technical setup",  col: C.redText   },
+    ],
+  },
+];
+
+const FUND_GUIDE = [
+  {
+    name: "P/E",
+    full: "Price-to-Earnings Ratio",
+    desc: "How many rupees you pay for every PKR 1 of annual profit. PSX market average is typically 8–12×.",
+    bands: [
+      { range: "< 8×",     label: "Potentially undervalued — cheap",    col: C.greenText },
+      { range: "8–15×",    label: "Fair value range for PSX",           col: C.muted     },
+      { range: "15–20×",   label: "Slightly premium — growth priced in",col: C.amberText },
+      { range: "> 20×",    label: "Expensive — high expectations baked in", col: C.redText },
+      { range: "Negative", label: "Loss-making company this year",      col: C.redText   },
+    ],
+  },
+  {
+    name: "PBV",
+    full: "Price-to-Book Value",
+    desc: "Price vs the company's net assets per share. A value of 1× means you pay exactly what the assets are worth.",
+    bands: [
+      { range: "< 1×",  label: "Trading below net assets — deep value (or distressed)", col: C.greenText },
+      { range: "1–2×",  label: "Reasonable valuation",                                  col: C.muted     },
+      { range: "2–3×",  label: "Moderate premium — quality company",                   col: C.amberText },
+      { range: "> 3×",  label: "High premium — must justify with strong ROE",           col: C.redText   },
+    ],
+  },
+  {
+    name: "Div %",
+    full: "Dividend Yield",
+    desc: "Annual cash dividend paid to shareholders as a percentage of the current share price. Income return on your investment.",
+    bands: [
+      { range: "0%",    label: "No dividend — profits reinvested in growth", col: C.muted     },
+      { range: "1–3%",  label: "Low yield — growth-oriented stock",          col: C.muted     },
+      { range: "3–6%",  label: "Good yield — typical for PSX blue chips",    col: C.greenText },
+      { range: "> 6%",  label: "High yield — income stock or price has fallen", col: C.greenText },
+    ],
+  },
+  {
+    name: "1M / 1Y",
+    full: "Periodic Price Returns",
+    desc: "Actual price change over the last 1 month and 1 year, shown as a percentage. Reflects momentum and long-term trend.",
+    bands: [
+      { range: "1Y > +20%",  label: "Strong long-term momentum",    col: C.greenText },
+      { range: "1Y 0–20%",   label: "Positive but moderate trend",  col: C.greenText },
+      { range: "1Y negative",label: "Underperformed — check why",   col: C.redText   },
+    ],
+  },
+  {
+    name: "52W Bar",
+    full: "52-Week Price Position",
+    desc: "Where the current price sits within the stock's 52-week high-low range. Shows if the stock is near a yearly high or low.",
+    bands: [
+      { range: "0–30%",  label: "Near 52-week low — beaten down, possible value entry", col: C.redText   },
+      { range: "30–70%", label: "Mid-range — balanced momentum",                        col: C.amberText },
+      { range: "70–100%",label: "Near 52-week high — strong momentum, watch resistance",col: C.greenText },
+    ],
+  },
+  {
+    name: "MCap",
+    full: "Market Capitalisation",
+    desc: "Total value of all outstanding shares (shares × price). Indicates company size and liquidity.",
+    bands: [
+      { range: "> 100B",   label: "Large cap — highly liquid, lower risk",   col: C.greenText },
+      { range: "10–100B",  label: "Mid cap — good balance of growth & size", col: C.muted     },
+      { range: "1–10B",    label: "Small cap — higher potential, more risk", col: C.amberText },
+      { range: "< 1B",     label: "Micro cap — illiquid, speculative",       col: C.redText   },
+    ],
+  },
+];
+
+function MetricsGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "24px 12px", overflowY: "auto" }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ background: C.card, border: `0.5px solid ${C.border2}`, borderRadius: 10, padding: "18px 20px", width: "100%", maxWidth: 780, position: "relative" }}
+      >
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Metrics Guide</div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>What each indicator measures and how to read it</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20, lineHeight: 1, padding: "0 4px" }}>×</button>
+        </div>
+
+        {/* Two-column layout */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          {/* Left: Technical */}
+          <div>
+            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 10, paddingBottom: 6, borderBottom: `0.5px solid ${C.border}` }}>
+              Technical Indicators
+            </div>
+            {TECH_GUIDE.map((m) => (
+              <div key={m.name} style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 2 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: C.text }}>{m.name}</span>
+                  <span style={{ fontSize: 9, color: C.dim }}>{m.full}</span>
+                </div>
+                <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5, marginBottom: 5 }}>{m.desc}</div>
+                {m.bands.map((b, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 3 }}>
+                    <span style={{ fontSize: 9, color: C.dim, minWidth: 58, flexShrink: 0, paddingTop: 1 }}>{b.range}</span>
+                    <span style={{ fontSize: 9, color: b.col, lineHeight: 1.4 }}>{b.label}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          {/* Right: Fundamentals */}
+          <div>
+            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 10, paddingBottom: 6, borderBottom: `0.5px solid ${C.border}` }}>
+              Fundamental Indicators
+            </div>
+            {FUND_GUIDE.map((m) => (
+              <div key={m.name} style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 2 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: C.text }}>{m.name}</span>
+                  <span style={{ fontSize: 9, color: C.dim }}>{m.full}</span>
+                </div>
+                <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5, marginBottom: 5 }}>{m.desc}</div>
+                {m.bands.map((b, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 3 }}>
+                    <span style={{ fontSize: 9, color: C.dim, minWidth: 58, flexShrink: 0, paddingTop: 1 }}>{b.range}</span>
+                    <span style={{ fontSize: 9, color: b.col, lineHeight: 1.4 }}>{b.label}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14, fontSize: 9, color: C.dim, borderTop: `0.5px solid ${C.border}`, paddingTop: 10 }}>
+          Technical data computed from PSX price history · Fundamental data sourced from askanalyst.com.pk · Not financial advice
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Derive catalysts & risks from raw technical data ──────────────────────
 interface StockTechLocal {
   symbol: string; compositeScore: number; technicalSignal: string;
@@ -413,6 +613,7 @@ export default function Dashboard() {
   // Settings
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
   const [showSettings, setShowSettings] = useState(false);
+  const [showMetricsGuide, setShowMetricsGuide] = useState(false);
 
   // UI state
   const [tab, setTab] = useState<"opportunities" | "holdings" | "watching">("opportunities");
@@ -1206,26 +1407,35 @@ export default function Dashboard() {
             {/* Header row: label + action buttons */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
               <span style={s_label}>Watchlist · KMI-30 / Shariah tickers</span>
-              {watching.length > 0 && (
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <button
-                    onClick={async () => { await fetchWatchTech(); fetchPrices(); }}
-                    disabled={loadingWatchTech || runningWatchAI}
-                    style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}
-                    title="Refresh technicals and prices for all watchlist tickers"
-                  >
-                    {loadingWatchTech ? "↻ Refreshing…" : "↻ Refresh"}
-                  </button>
-                  <button
-                    onClick={runWatchlistAI}
-                    disabled={runningWatchAI || loadingWatchTech || !settings.apiKey}
-                    style={{ ...accentBtn, fontSize: 9, padding: "3px 10px", opacity: (runningWatchAI || !settings.apiKey) ? 0.5 : 1 }}
-                    title={!settings.apiKey ? "Set your API key in Settings first" : "Run AI analysis on your watchlist using the same pipeline as Buy Opportunities"}
-                  >
-                    {runningWatchAI ? "⟳ Analysing…" : "✦ AI Analysis"}
-                  </button>
-                </div>
-              )}
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {watching.length > 0 && (
+                  <>
+                    <button
+                      onClick={async () => { await fetchWatchTech(); fetchPrices(); }}
+                      disabled={loadingWatchTech || runningWatchAI}
+                      style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}
+                      title="Refresh technicals and prices for all watchlist tickers"
+                    >
+                      {loadingWatchTech ? "↻ Refreshing…" : "↻ Refresh"}
+                    </button>
+                    <button
+                      onClick={runWatchlistAI}
+                      disabled={runningWatchAI || loadingWatchTech || !settings.apiKey}
+                      style={{ ...accentBtn, fontSize: 9, padding: "3px 10px", opacity: (runningWatchAI || !settings.apiKey) ? 0.5 : 1 }}
+                      title={!settings.apiKey ? "Set your API key in Settings first" : "Run AI analysis on your watchlist using the same pipeline as Buy Opportunities"}
+                    >
+                      {runningWatchAI ? "⟳ Analysing…" : "✦ AI Analysis"}
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={() => setShowMetricsGuide(true)}
+                  style={{ ...btnSt, fontSize: 9, padding: "3px 9px", borderColor: C.purple + "60", color: C.purpleText }}
+                  title="Metrics guide — what each indicator means and what values are good"
+                >
+                  ? Guide
+                </button>
+              </div>
             </div>
 
             {/* Sort controls */}
@@ -1406,6 +1616,7 @@ export default function Dashboard() {
       </div>
 
       <Settings open={showSettings} onClose={() => setShowSettings(false)} onSave={s => { setSettings(s); setShowSettings(false); }} />
+      <MetricsGuide open={showMetricsGuide} onClose={() => setShowMetricsGuide(false)} />
     </div>
   );
 }
