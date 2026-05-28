@@ -787,6 +787,7 @@ export default function Dashboard() {
       shariah: isShariah,
     }]);
     setNewHolding({ ticker: "", shares: "", avg: "" });
+    fetchAskAnalystBatch([t]);
   };
 
   const addWatch = async () => {
@@ -886,12 +887,24 @@ export default function Dashboard() {
     setHoldingTech(prev => ({ ...prev, ...results }));
   }, [holdings]); // eslint-disable-line
 
-  // Auto-fetch holding tech + fundamentals when Holdings tab is opened
+  // On first mount: load fundamentals for all existing watchlist + holdings tickers
+  useEffect(() => {
+    const all = [...new Set([
+      ...watching.map(w => w.ticker),
+      ...holdings.map(h => h.ticker),
+    ])];
+    if (all.length > 0) fetchAskAnalystBatch(all);
+  }, []); // eslint-disable-line — intentional one-time load
+
+  // Auto-fetch tech + fundamentals when tab changes
   const prevTabRef = useRef<string>("");
   useEffect(() => {
     if (tab === "holdings" && prevTabRef.current !== "holdings") {
       fetchHoldingTech();
       fetchAskAnalystBatch(holdings.map(h => h.ticker));
+    }
+    if (tab === "watching" && prevTabRef.current !== "watching") {
+      fetchAskAnalystBatch(watching.map(w => w.ticker));
     }
     prevTabRef.current = tab;
   }, [tab]); // eslint-disable-line
@@ -985,6 +998,13 @@ export default function Dashboard() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <PKTClock />
           <button onClick={fetchPrices} style={btnSt}>↻</button>
+          <button
+            onClick={() => setShowMetricsGuide(true)}
+            style={{ ...btnSt, fontSize: 10, padding: "4px 10px", borderColor: C.purple + "60", color: C.purpleText }}
+            title="Metrics guide — what each indicator means and what values are good"
+          >
+            ? Guide
+          </button>
           <button onClick={() => setShowSettings(true)} style={{ ...btnSt, color: hasKey ? C.greenText : C.amberText, borderColor: hasKey ? C.green + "60" : C.amber + "60" }}>
             ⚙ {hasKey ? settings.provider : "Set API Key"}
           </button>
@@ -1407,35 +1427,26 @@ export default function Dashboard() {
             {/* Header row: label + action buttons */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
               <span style={s_label}>Watchlist · KMI-30 / Shariah tickers</span>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {watching.length > 0 && (
-                  <>
-                    <button
-                      onClick={async () => { await fetchWatchTech(); fetchPrices(); }}
-                      disabled={loadingWatchTech || runningWatchAI}
-                      style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}
-                      title="Refresh technicals and prices for all watchlist tickers"
-                    >
-                      {loadingWatchTech ? "↻ Refreshing…" : "↻ Refresh"}
-                    </button>
-                    <button
-                      onClick={runWatchlistAI}
-                      disabled={runningWatchAI || loadingWatchTech || !settings.apiKey}
-                      style={{ ...accentBtn, fontSize: 9, padding: "3px 10px", opacity: (runningWatchAI || !settings.apiKey) ? 0.5 : 1 }}
-                      title={!settings.apiKey ? "Set your API key in Settings first" : "Run AI analysis on your watchlist using the same pipeline as Buy Opportunities"}
-                    >
-                      {runningWatchAI ? "⟳ Analysing…" : "✦ AI Analysis"}
-                    </button>
-                  </>
-                )}
-                <button
-                  onClick={() => setShowMetricsGuide(true)}
-                  style={{ ...btnSt, fontSize: 9, padding: "3px 9px", borderColor: C.purple + "60", color: C.purpleText }}
-                  title="Metrics guide — what each indicator means and what values are good"
-                >
-                  ? Guide
-                </button>
-              </div>
+              {watching.length > 0 && (
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <button
+                    onClick={async () => { await fetchWatchTech(); fetchPrices(); }}
+                    disabled={loadingWatchTech || runningWatchAI}
+                    style={{ ...btnSt, fontSize: 9, padding: "3px 10px" }}
+                    title="Refresh technicals and prices for all watchlist tickers"
+                  >
+                    {loadingWatchTech ? "↻ Refreshing…" : "↻ Refresh"}
+                  </button>
+                  <button
+                    onClick={runWatchlistAI}
+                    disabled={runningWatchAI || loadingWatchTech || !settings.apiKey}
+                    style={{ ...accentBtn, fontSize: 9, padding: "3px 10px", opacity: (runningWatchAI || !settings.apiKey) ? 0.5 : 1 }}
+                    title={!settings.apiKey ? "Set your API key in Settings first" : "Run AI analysis on your watchlist using the same pipeline as Buy Opportunities"}
+                  >
+                    {runningWatchAI ? "⟳ Analysing…" : "✦ AI Analysis"}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Sort controls */}

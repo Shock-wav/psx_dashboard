@@ -31,6 +31,7 @@ import {
   type ProviderConfig,
 } from "./providers";
 import { fetchPakistanNews } from "./news-fetcher";
+import { getMultipleFundamentals, fundamentalsPromptLine } from "./askanalyst";
 
 export interface ScanResult {
   timestamp: string;            // ISO string
@@ -43,6 +44,47 @@ export interface ScanResult {
   newsHeadlines: string[];      // top headlines fed to the AI (for transparency)
   newsSources: string[];        // RSS source names that had articles
   newsFromCache: boolean;       // true when AI analysis was reused (news unchanged)
+}
+
+// ─── Sector-rep tickers for fundamentals context injected into AI prompt ──
+const SECTOR_REPS = [
+  "HBL", "MCB",        // Banking
+  "OGDC", "PPL", "PSO", // Oil & Gas
+  "LUCK", "MLCF",       // Cement
+  "ENGRO", "FFC",       // Fertilizer / Chemicals
+  "SYS",                // Technology
+];
+
+let _fundCtxCache: { text: string; at: number } | null = null;
+const FUND_CTX_TTL_MS = 60 * 60 * 1_000; // 1 hour — fundamentals change slowly
+
+/** Fetch a snapshot of sector-rep fundamentals for AI context injection. Never throws. */
+async function getFundamentalsContext(): Promise<string> {
+  const now = Date.now();
+  if (_fundCtxCache && now - _fundCtxCache.at < FUND_CTX_TTL_MS) {
+    return _fundCtxCache.text;
+  }
+  try {
+    const map = await getMultipleFundamentals(SECTOR_REPS);
+    if (map.size === 0) return "";
+    const lines: string[] = [];
+    for (const ticker of SECTOR_REPS) {
+      const f = map.get(ticker);
+      if (f) {
+        const line = fundamentalsPromptLine(f);
+        if (line) lines.push(`  ${ticker}: ${line}`);
+      }
+    }
+    if (!lines.length) return "";
+    const text =
+      "\n\n--- LIVE PSX MARKET FUNDAMENTALS (sector representatives, for context) ---\n" +
+      lines.join("\n") +
+      "\n---";
+    _fundCtxCache = { text, at: now };
+    return text;
+  } catch {
+    return ""; // fundamentals are additive — never block news analysis
+  }
 }
 
 // ─── Server-side news cache ────────────────────────────────────────────────
@@ -88,7 +130,12 @@ async function getNewsAnalysisWithCache(config: ProviderConfig): Promise<{
   newsSources: string[];
   fromCache: boolean;
 }> {
-  const rawNews = await fetchPakistanNews();
+  // Fetch RSS news and sector fundamentals in parallel — no extra latency
+  const [rawNews, fundamentalsCtx] = await Promise.all([
+    fetchPakistanNews(),
+    getFundamentalsContext(),
+  ]);
+
   const headlines = extractHeadlines(rawNews, 10);
   const sources = extractSources(rawNews);
 
@@ -102,8 +149,12 @@ async function getNewsAnalysisWithCache(config: ProviderConfig): Promise<{
     }
   }
 
-  // Headlines changed significantly — run AI analysis on fresh news
-  const newsAnalysis = await getNewsAnalysis(config, rawNews);
+  // Augment news with live fundamentals so AI has valuation context
+  // e.g. "Banking at PE 6x — is this news bullish/bearish given current pricing?"
+  const augmentedNews = fundamentalsCtx ? rawNews + fundamentalsCtx : rawNews;
+
+  // Headlines changed significantly — run AI analysis on fresh (augmented) news
+  const newsAnalysis = await getNewsAnalysis(config, augmentedNews);
   _newsCache = { text: rawNews, analysis: newsAnalysis, headlines, sources, at: Date.now() };
   return { newsAnalysis, newsHeadlines: headlines, newsSources: sources, fromCache: false };
 }
