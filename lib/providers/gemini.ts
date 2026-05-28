@@ -29,18 +29,19 @@ export async function getNewsAnalysis(
     // No tools = no paid Google Search grounding
   });
 
-  const prompt = `You are a Pakistan stock market analyst. Based on the following news headlines fetched from Pakistani news sources today, identify macro conditions and which PSX sectors are affected.
+  const prompt = `You are a Pakistan stock market analyst. Based on the following news headlines and market data from Pakistani sources today, identify macro conditions and which PSX sectors are affected.
 
-NEWS HEADLINES:
+NEWS AND MARKET DATA:
 ${newsText}
 
 Return ONLY this JSON (no markdown, no preamble):
 {
   "summary": "2-3 sentence macro overview of current Pakistan market conditions",
+  "detailedNarrative": "4-6 sentence paragraph covering: (1) the current macro situation with specific figures where available (PKR rate, oil price, SBP policy rate, inflation %, GDP etc.), (2) what is causing it — global triggers and domestic factors, (3) which sectors benefit most and which face headwinds with specific reasons, (4) near-term market outlook and key risks to watch",
   "affectedSectors": [
-    { "sectorName": "Oil & Gas", "sectorCode": "0820", "impact": "NEGATIVE", "reason": "..." }
+    { "sectorName": "Oil & Gas", "sectorCode": "0820", "impact": "NEGATIVE", "reason": "brief reason with figure if available" }
   ],
-  "globalFactors": ["Oil -3%", "USD/PKR 278"]
+  "globalFactors": ["Oil -3% on demand fears", "USD/PKR 278 stable", "IMF tranche $1.1B"]
 }
 
 Rules:

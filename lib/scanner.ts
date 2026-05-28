@@ -198,12 +198,14 @@ async function fetchAndScore(
 /** Build the stock context string fed to the AI in Pass 2. */
 function buildStockContext(
   scores: TechnicalScore[],
-  quotes: Record<string, StockQuote>
+  quotes: Record<string, StockQuote>,
+  fundamentals?: Map<string, import("./askanalyst").AskAnalystFundamentals>
 ): string {
   return scores
     .slice(0, 20) // cap at 20 to keep prompt manageable
     .map((s) => {
       const q = quotes[s.symbol];
+      const f = fundamentals?.get(s.symbol);
       const price = q?.currentPrice ?? s.currentPrice;
       const chg = q?.changePercent ?? 0;
       const lines = [
@@ -214,6 +216,10 @@ function buildStockContext(
         `  Crossover: ${s.crossoverSignal} | Price vs EMA20: ${s.priceVsEma20} | vs EMA50: ${s.priceVsEma50}`,
         ...s.reasons.map((r) => `  • ${r}`),
       ];
+      if (f) {
+        const fundLine = fundamentalsPromptLine(f);
+        if (fundLine) lines.push(`  Fundamentals: ${fundLine}`);
+      }
       return lines.join("\n");
     })
     .join("\n\n");
@@ -314,7 +320,15 @@ export async function runFullScan(
   );
 
   // --- Pass 2 continued: AI signal generation ---
-  const stockContext = buildStockContext(scoredStocks, quotes);
+  // Fetch fundamentals for scored stocks in parallel (best-effort, non-blocking)
+  let fundamentalsMap: Map<import("./askanalyst").AskAnalystFundamentals["symbol"], import("./askanalyst").AskAnalystFundamentals> | undefined;
+  try {
+    fundamentalsMap = await getMultipleFundamentals(
+      scoredStocks.slice(0, 20).map((s) => s.symbol)
+    );
+  } catch { /* fundamentals are additive, never block the scan */ }
+
+  const stockContext = buildStockContext(scoredStocks, quotes, fundamentalsMap);
   const newsContext = buildNewsContext(newsAnalysis);
 
   let signals: AISignal[] = [];

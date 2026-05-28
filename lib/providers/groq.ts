@@ -39,7 +39,7 @@ export async function getNewsAnalysis(
 
   const resp = await client.chat.completions.create({
     model: config.model ?? "llama-3.3-70b-versatile",
-    max_tokens: 1000,
+    max_tokens: 1500,
     response_format: { type: "json_object" },
     messages: [
       {
@@ -48,18 +48,19 @@ export async function getNewsAnalysis(
       },
       {
         role: "user",
-        content: `Based on the following news headlines from Pakistani news sources, identify macro conditions and which PSX sectors are affected. If no news is available, use general Pakistan market knowledge.
+        content: `Based on the following news headlines and market data from Pakistani sources, analyse macro conditions and PSX sector impacts. If no news is available, use general Pakistan market knowledge.
 
-NEWS HEADLINES:
+NEWS AND MARKET DATA:
 ${newsText}
 
 Respond with this exact JSON structure:
 {
   "summary": "2-3 sentence macro overview of current Pakistan market conditions",
+  "detailedNarrative": "4-6 sentence paragraph covering: (1) the current macro situation with specific figures where available (PKR rate, oil price, SBP policy rate, inflation %, GDP etc.), (2) what is causing it — global triggers and domestic factors, (3) which sectors benefit most and which face headwinds with specific reasons, (4) near-term market outlook and key risks to watch",
   "affectedSectors": [
-    { "sectorName": "Oil & Gas", "sectorCode": "0820", "impact": "NEGATIVE", "reason": "brief reason" }
+    { "sectorName": "Oil & Gas", "sectorCode": "0820", "impact": "NEGATIVE", "reason": "brief reason with figure if available" }
   ],
-  "globalFactors": ["Oil -3%", "USD/PKR 278"]
+  "globalFactors": ["Oil -3% on demand fears", "USD/PKR 278 stable", "IMF tranche approved $1.1B"]
 }
 
 Rules: max 5 sectors, impact must be POSITIVE/NEGATIVE/NEUTRAL, sectorCode from: 0801 0804 0805 0807 0808 0809 0810 0812 0819 0820 0821 0822 0823 0824 0825 0826 0828 0829`,

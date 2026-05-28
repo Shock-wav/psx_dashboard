@@ -25,13 +25,14 @@ const PILL_MAP: Record<string, { bg: string; color: string; border: string }> = 
   SELL:       { bg: C.redDim,   color: C.redText,   border: C.red   },
   AVOID:      { bg: C.redDim,   color: C.redText,   border: C.red   },
 };
-function Pill({ signal, small }: { signal?: string; small?: boolean }) {
+function Pill({ signal, small, onClick }: { signal?: string; small?: boolean; onClick?: () => void }) {
   const s = PILL_MAP[signal?.toUpperCase() ?? ""] ?? PILL_MAP.WATCH;
   return (
-    <span style={{
+    <span onClick={onClick} style={{
       background: s.bg, color: s.color, border: `0.5px solid ${s.border}`,
       borderRadius: 20, padding: small ? "1px 7px" : "2px 9px",
-      fontSize: small ? 9 : 10, fontWeight: 600, letterSpacing: 0.3, whiteSpace: "nowrap"
+      fontSize: small ? 9 : 10, fontWeight: 600, letterSpacing: 0.3, whiteSpace: "nowrap",
+      ...(onClick ? { cursor: "pointer" } : {}),
     }}>{signal?.toUpperCase() ?? "—"}</span>
   );
 }
@@ -318,11 +319,168 @@ function MetricsGuide({ open, onClose }: { open: boolean; onClose: () => void })
   );
 }
 
+// ─── Signal detail popup ────────────────────────────────────────────────────
+interface SignalDetail {
+  ticker: string;
+  signal?: string;
+  confidence?: number;
+  reason?: string;
+  newsHeadline?: string;
+  catalysts?: string[];
+  risks?: string[];
+  suggestedEntry?: string;
+  tech?: StockTechLocal;
+  fundamentals?: AskAnalystFundamentals;
+  currentPrice?: number;
+  changePercent?: number;
+}
+
+function SignalDetailModal({ data, onClose }: { data: SignalDetail; onClose: () => void }) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  const { ticker, signal, confidence, reason, newsHeadline, catalysts, risks, suggestedEntry, tech, fundamentals, currentPrice, changePercent } = data;
+  const pillStyle = PILL_MAP[signal?.toUpperCase() ?? ""] ?? PILL_MAP.WATCH;
+
+  const pos52w = fundamentals?.fiftyTwoWeekHigh && fundamentals?.fiftyTwoWeekLow && fundamentals.fiftyTwoWeekHigh > fundamentals.fiftyTwoWeekLow
+    ? Math.round(((fundamentals.currentPrice - fundamentals.fiftyTwoWeekLow) / (fundamentals.fiftyTwoWeekHigh - fundamentals.fiftyTwoWeekLow)) * 100)
+    : null;
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 12px" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.card, border: `0.5px solid ${C.border2}`, borderRadius: 10, padding: "16px 18px", width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto" }}>
+
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 18, fontWeight: 700 }}>{ticker}</span>
+            {signal && (
+              <span style={{ background: pillStyle.bg, color: pillStyle.color, border: `0.5px solid ${pillStyle.border}`, borderRadius: 20, padding: "3px 10px", fontSize: 11, fontWeight: 600 }}>
+                {signal.toUpperCase()}
+              </span>
+            )}
+            {currentPrice !== undefined && (
+              <span style={{ fontSize: 13, fontWeight: 500, color: C.text }}>PKR {currentPrice.toFixed(2)}</span>
+            )}
+            {changePercent !== undefined && (
+              <span style={{ fontSize: 10, color: changePercent >= 0 ? C.greenText : C.redText }}>
+                {changePercent >= 0 ? "+" : ""}{changePercent.toFixed(2)}%
+              </span>
+            )}
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 18 }}>×</button>
+        </div>
+
+        {/* AI reason */}
+        {reason && <p style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, margin: "0 0 10px" }}>{reason}</p>}
+
+        {/* Confidence bar */}
+        {confidence !== undefined && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+              <span style={{ fontSize: 9, color: C.dim }}>AI Confidence</span>
+              <span style={{ fontSize: 9, color: C.muted }}>{confidence}%</span>
+            </div>
+            <div style={{ height: 3, background: C.border2, borderRadius: 2 }}>
+              <div style={{ width: `${confidence}%`, height: 3, background: pillStyle.border, borderRadius: 2 }} />
+            </div>
+          </div>
+        )}
+
+        {/* News headline */}
+        {newsHeadline && newsHeadline !== "No recent news" && (
+          <div style={{ fontSize: 10, color: C.dim, fontStyle: "italic", marginBottom: 10 }}>📰 {newsHeadline}</div>
+        )}
+
+        {/* Catalysts + Risks */}
+        {((catalysts?.length ?? 0) > 0 || (risks?.length ?? 0) > 0) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+            {(catalysts?.length ?? 0) > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: C.greenText, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Why it works</div>
+                {catalysts!.map((c, i) => <div key={i} style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>▲ {c}</div>)}
+              </div>
+            )}
+            {(risks?.length ?? 0) > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: C.redText, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Risks</div>
+                {risks!.map((r, i) => <div key={i} style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>▼ {r}</div>)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Technical indicators */}
+        {tech && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Technical Indicators</div>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              {([
+                ["RSI", tech.rsi.toFixed(0), tech.rsi < 30 ? C.greenText : tech.rsi > 70 ? C.redText : C.muted],
+                ["EMA20", tech.ema20.toFixed(2), C.muted],
+                ["EMA50", tech.ema50.toFixed(2), C.muted],
+                ["Vol", `${tech.volumeRatio.toFixed(1)}x avg`, tech.volumeRatio >= 1.5 ? C.greenText : C.muted],
+                ["Score", `${tech.compositeScore}/100`, tech.compositeScore >= 60 ? C.greenText : tech.compositeScore >= 40 ? C.amberText : C.redText],
+                ["Trend", tech.priceVsEma20 === "above" && tech.priceVsEma50 === "above" ? "Uptrend" : tech.priceVsEma20 === "below" && tech.priceVsEma50 === "below" ? "Downtrend" : "Mixed",
+                  tech.priceVsEma20 === "above" && tech.priceVsEma50 === "above" ? C.greenText : tech.priceVsEma20 === "below" && tech.priceVsEma50 === "below" ? C.redText : C.amberText],
+              ] as [string, string, string][]).map(([lbl, val, col]) => (
+                <div key={lbl} style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4, alignItems: "center" }}>
+                  <span style={{ fontSize: 8, color: C.dim }}>{lbl}</span>
+                  <span style={{ fontSize: 10, fontWeight: 500, color: col }}>{val}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Fundamentals */}
+        {fundamentals && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Fundamental Data</div>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+              {fundamentals.pe !== null && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>P/E</span><span style={{ fontSize: 10, fontWeight: 500, color: fundamentals.pe < 8 ? C.greenText : fundamentals.pe > 20 ? C.amberText : C.text }}>{fundamentals.pe.toFixed(1)}x</span></div>}
+              {fundamentals.pbv !== null && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>PBV</span><span style={{ fontSize: 10, fontWeight: 500, color: C.muted }}>{fundamentals.pbv.toFixed(1)}x</span></div>}
+              {fundamentals.dividendYield !== null && fundamentals.dividendYield > 0 && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>Div</span><span style={{ fontSize: 10, fontWeight: 500, color: C.greenText }}>{fundamentals.dividendYield.toFixed(1)}%</span></div>}
+              {fundamentals.totalReturn1M !== null && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>1M</span><span style={{ fontSize: 10, fontWeight: 500, color: fundamentals.totalReturn1M >= 0 ? C.greenText : C.redText }}>{fundamentals.totalReturn1M >= 0 ? "+" : ""}{fundamentals.totalReturn1M.toFixed(1)}%</span></div>}
+              {fundamentals.totalReturn1Y !== null && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>1Y</span><span style={{ fontSize: 10, fontWeight: 500, color: fundamentals.totalReturn1Y >= 0 ? C.greenText : C.redText }}>{fundamentals.totalReturn1Y >= 0 ? "+" : ""}{fundamentals.totalReturn1Y.toFixed(1)}%</span></div>}
+              {pos52w !== null && (
+                <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 5, alignItems: "center" }}>
+                  <span style={{ fontSize: 8, color: C.dim }}>52W</span>
+                  <div style={{ width: 40, height: 3, background: C.border2, borderRadius: 2, position: "relative" }}>
+                    <div style={{ position: "absolute", left: 0, top: 0, width: `${pos52w}%`, height: 3, borderRadius: 2, background: pos52w > 70 ? C.green : pos52w < 30 ? C.red : C.amber }} />
+                  </div>
+                  <span style={{ fontSize: 9, color: C.muted }}>{pos52w}%</span>
+                </div>
+              )}
+              {fundamentals.marketCap !== null && fundamentals.marketCap > 0 && <div style={{ background: "#111", borderRadius: 4, padding: "3px 8px", display: "flex", gap: 4 }}><span style={{ fontSize: 8, color: C.dim }}>MCap</span><span style={{ fontSize: 10, fontWeight: 500, color: C.muted }}>{fundamentals.marketCap >= 1000 ? `${(fundamentals.marketCap / 1000).toFixed(0)}B` : `${Math.round(fundamentals.marketCap)}M`}</span></div>}
+            </div>
+          </div>
+        )}
+
+        {/* Suggested entry */}
+        {suggestedEntry && (
+          <div style={{ background: C.amberDim, border: `0.5px solid ${C.amber}40`, borderRadius: 6, padding: "6px 10px", display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 9, color: C.dim }}>Suggested entry</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: C.amberText }}>{suggestedEntry}</span>
+          </div>
+        )}
+
+        <div style={{ marginTop: 12, fontSize: 9, color: C.dim }}>
+          Fundamentals sourced from askanalyst.com.pk · Technical analysis from PSX price history · Not financial advice
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Derive catalysts & risks from raw technical data ──────────────────────
 interface StockTechLocal {
   symbol: string; compositeScore: number; technicalSignal: string;
   rsi: number; ema20: number; ema50: number; currentPrice: number;
-  volumeRatio: number; crossoverSignal: string; priceVsEma20: string; reasons: string[];
+  volumeRatio: number; crossoverSignal: string; priceVsEma20: string; priceVsEma50?: string; reasons: string[];
 }
 function techCatalysts(t: StockTechLocal): string[] {
   const out: string[] = [];
@@ -395,6 +553,20 @@ const btnSt: React.CSSProperties = { fontSize: 10, padding: "4px 10px", borderRa
 const accentBtn: React.CSSProperties = { ...btnSt, borderColor: C.green + "80", color: C.greenText };
 const dangerBtn: React.CSSProperties = { ...btnSt, borderColor: C.amber + "60", color: C.amberText };
 
+// ─── PSX sector code → readable name ──────────────────────────────────────
+const SECTOR_CODE_TO_NAME: Record<string, string> = {
+  "0801": "Automobile", "0804": "Cement", "0805": "Chemicals",
+  "0807": "Banking", "0808": "Engineering", "0809": "Fertilizer",
+  "0810": "Food & Beverages", "0812": "Insurance", "0819": "Modaraba",
+  "0820": "Oil & Gas", "0821": "OMC", "0822": "Packaging",
+  "0823": "Pharmaceuticals", "0824": "Power", "0825": "Refinery",
+  "0826": "Sugar", "0828": "Technology", "0829": "Textile",
+  "0833": "Transport", "0836": "REIT", "0838": "Real Estate",
+};
+function resolveSectorName(raw: string): string {
+  return SECTOR_CODE_TO_NAME[raw.trim()] ?? raw;
+}
+
 // ─── Holdings breakdown chart (pure SVG, zero dependencies) ──────────────
 const PIE_COLORS = [C.green, C.blue, C.amber, C.purple, "#c08060", "#60b0c0", "#a0c060", "#c060a0"];
 
@@ -446,7 +618,8 @@ function HoldingsPieChart({ holdings, prices }: {
   const sectorMap: Record<string, number> = {};
   for (const h of holdings) {
     const val = (prices[h.ticker]?.currentPrice ?? h.avgPrice) * h.shares;
-    const sector = h.name.includes(" · ") ? h.name.split(" · ").slice(1).join(" · ") : "Other";
+    const rawSector = h.name.includes(" · ") ? h.name.split(" · ").slice(1).join(" · ") : "Other";
+    const sector = resolveSectorName(rawSector);
     sectorMap[sector] = (sectorMap[sector] ?? 0) + val;
   }
   const sectorEntries = Object.entries(sectorMap).sort((a, b) => b[1] - a[1]);
@@ -614,6 +787,7 @@ export default function Dashboard() {
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
   const [showSettings, setShowSettings] = useState(false);
   const [showMetricsGuide, setShowMetricsGuide] = useState(false);
+  const [signalDetail, setSignalDetail] = useState<SignalDetail | null>(null);
 
   // UI state
   const [tab, setTab] = useState<"opportunities" | "holdings" | "watching">("opportunities");
@@ -646,7 +820,7 @@ export default function Dashboard() {
       });
       if (res.ok) {
         const data = await res.json();
-        setPrices(data);
+        setPrices(prev => ({ ...prev, ...data }));
         setServerOnline(true);
         const pkt = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" }));
         setLastUpdated(pkt.toLocaleTimeString("en-PK", { hour: "2-digit", minute: "2-digit" }) + " PKT");
@@ -1101,8 +1275,8 @@ export default function Dashboard() {
                 {/* Expanded narrative */}
                 {expandNewsPanel && (
                   <div style={{ marginTop: 8, paddingTop: 10, borderTop: `0.5px solid ${C.border}` }}>
-                    <p style={{ fontSize: 11, color: C.muted, lineHeight: 1.7, margin: "0 0 10px" }}>
-                      {buildExpandedNarrative(scanResult.newsAnalysis)}
+                    <p style={{ fontSize: 11, color: C.muted, lineHeight: 1.8, margin: "0 0 10px" }}>
+                      {scanResult.newsAnalysis.detailedNarrative ?? buildExpandedNarrative(scanResult.newsAnalysis)}
                     </p>
                     {scanResult.newsSources.length > 0 && (
                       <div style={{ fontSize: 9, color: C.dim }}>
@@ -1183,7 +1357,7 @@ export default function Dashboard() {
                     <div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
                         <span style={{ fontSize: 15, fontWeight: 600 }}>{sig.ticker}</span>
-                        <Pill signal={sig.signal} />
+                        <Pill signal={sig.signal} onClick={() => setSignalDetail({ ticker: sig.ticker, signal: sig.signal, confidence: sig.confidence, reason: sig.reason, newsHeadline: sig.newsHeadline, catalysts: sig.catalysts, risks: sig.risks, suggestedEntry: sig.suggestedEntry, tech: sigTech, fundamentals: askAnalystData[sig.ticker], currentPrice: displayPrice, changePercent: displayChange })} />
                         <span style={{ fontSize: 10, color: C.dim }}>#{i + 1}</span>
                       </div>
                       <div style={{ fontSize: 11, color: C.muted }}>{sig.reason}</div>
@@ -1304,7 +1478,7 @@ export default function Dashboard() {
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 15, fontWeight: 600 }}>{h.ticker}</span>
                         {h.shariah && <span style={{ fontSize: 9, color: C.greenText, background: C.greenDim, padding: "1px 5px", borderRadius: 3 }}>Shariah ✓</span>}
-                        {tech && <Pill signal={tech.technicalSignal} small />}
+                        {tech && <Pill signal={tech.technicalSignal} small onClick={() => setSignalDetail({ ticker: h.ticker, signal: tech.technicalSignal, confidence: tech.compositeScore, reason: tech.reasons[0], catalysts: techCatalysts(tech), risks: techRisks(tech), tech, fundamentals: askAnalystData[h.ticker], currentPrice: livePrice ?? undefined, changePercent: p?.changePercent ?? undefined })} />}
                       </div>
                       <div style={{ fontSize: 10, color: C.muted }}>{h.name}</div>
                     </div>
@@ -1391,13 +1565,14 @@ export default function Dashboard() {
                     const bg  = s.signal === "BUY" || s.signal === "STRONG_BUY" ? C.greenDim
                               : s.signal === "SELL" || s.signal === "AVOID" ? C.redDim
                               : s.signal === "HOLD" ? C.amberDim : C.blueDim;
+                    const aiSig = scanResult?.signals.find(sig => sig.ticker === h.ticker);
                     return (
-                      <div style={{ marginTop: 8, background: bg, borderRadius: 6, padding: "6px 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                      <div onClick={() => setSignalDetail({ ticker: h.ticker, signal: s.signal, confidence: aiSig?.confidence ?? tech?.compositeScore, reason: s.text, newsHeadline: aiSig?.newsHeadline, catalysts: aiSig?.catalysts ?? (tech ? techCatalysts(tech) : []), risks: aiSig?.risks ?? (tech ? techRisks(tech) : []), suggestedEntry: aiSig?.suggestedEntry, tech: tech ?? undefined, fundamentals: askAnalystData[h.ticker], currentPrice: livePrice ?? undefined, changePercent: p?.changePercent ?? undefined })} style={{ marginTop: 8, background: bg, borderRadius: 6, padding: "6px 10px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                         <span style={{ fontSize: 9, fontWeight: 700, color: col, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
                           {s.signal}
                         </span>
                         <span style={{ fontSize: 10, color: col, flex: 1 }}>{s.text}</span>
-                        <span style={{ fontSize: 8, color: C.dim, whiteSpace: "nowrap" }}>{s.source}</span>
+                        <span style={{ fontSize: 8, color: C.dim, whiteSpace: "nowrap" }}>{s.source} ↗</span>
                       </div>
                     );
                   })()}
@@ -1504,7 +1679,7 @@ export default function Dashboard() {
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 6 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 15, fontWeight: 600 }}>{w.ticker}</span>
-                      {displaySignal && <Pill signal={displaySignal} />}
+                      {displaySignal && <Pill signal={displaySignal} onClick={() => setSignalDetail({ ticker: w.ticker, signal: displaySignal, confidence: displayConfPct ?? undefined, reason: displayReason ?? undefined, newsHeadline: activeSig?.newsHeadline, catalysts: displayCats, risks: displayRisks, suggestedEntry: activeSig?.suggestedEntry, tech: tech, fundamentals: askAnalystData[w.ticker], currentPrice: p?.currentPrice, changePercent: p?.changePercent })} />}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       {p && (
@@ -1628,6 +1803,7 @@ export default function Dashboard() {
 
       <Settings open={showSettings} onClose={() => setShowSettings(false)} onSave={s => { setSettings(s); setShowSettings(false); }} />
       <MetricsGuide open={showMetricsGuide} onClose={() => setShowMetricsGuide(false)} />
+      {signalDetail && <SignalDetailModal data={signalDetail} onClose={() => setSignalDetail(null)} />}
     </div>
   );
 }

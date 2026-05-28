@@ -26,18 +26,19 @@ export async function getNewsAnalysis(
 
   const resp = await client.messages.create({
     model: config.model ?? "claude-sonnet-4-5",
-    max_tokens: 1000,
+    max_tokens: 1500,
     messages: [
       {
         role: "user",
-        content: `You are a Pakistan stock market analyst. Based on the following news headlines fetched from Pakistani news sources today, identify the macro conditions and which PSX sectors are affected.
+        content: `You are a Pakistan stock market analyst. Based on the following news headlines and market data from Pakistani sources today, identify the macro conditions and which PSX sectors are affected.
 
-NEWS HEADLINES:
+NEWS AND MARKET DATA:
 ${newsText}
 
 Return ONLY this JSON (no markdown, no preamble):
 {
   "summary": "2-3 sentence macro overview of current Pakistan market conditions",
+  "detailedNarrative": "4-6 sentence paragraph covering: (1) the current macro situation with specific figures where available (PKR rate, oil price, SBP policy rate, inflation %, GDP etc.), (2) what is causing it — global triggers and domestic factors, (3) which sectors benefit most and which face headwinds with specific reasons, (4) near-term market outlook and key risks to watch",
   "affectedSectors": [
     {
       "sectorName": "Oil & Gas",
@@ -46,7 +47,7 @@ Return ONLY this JSON (no markdown, no preamble):
       "reason": "Global oil prices down 3% on demand concerns"
     }
   ],
-  "globalFactors": ["Oil -3%", "USD/PKR 278 stable", "IMF tranche approved"]
+  "globalFactors": ["Oil -3% on demand fears", "USD/PKR 278 stable", "IMF tranche approved $1.1B"]
 }
 
 Rules:

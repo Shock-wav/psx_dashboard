@@ -20,6 +20,7 @@ export interface SectorSignal {
 
 export interface NewsAnalysis {
   summary: string;           // 2-3 sentence macro overview
+  detailedNarrative?: string; // 4-6 sentence prose: situation → causes → sector impact → outlook
   affectedSectors: SectorSignal[];
   globalFactors: string[];   // e.g. ["Oil -3%", "USD/PKR stable", "IMF tranche approved"]
 }
