@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import Settings, { loadSettings, type UserSettings } from "./Settings";
 import type { AISignal, NewsAnalysis } from "@/lib/providers/types";
 import type { StockQuote } from "@/lib/psx";
+import type { AskAnalystFundamentals } from "@/lib/askanalyst";
 
 // ─── Colour palette ────────────────────────────────────────────────────────
 const C = {
@@ -46,6 +47,73 @@ function ConfBar({ pct, signal, label }: { pct: number; signal?: string; label?:
         <div style={{ width: `${pct}%`, height: 2, background: col, borderRadius: 2, transition: "width 0.6s ease" }} />
       </div>
       <span style={{ fontSize: 9, color: C.muted, minWidth: 28, textAlign: "right" }}>{pct}%</span>
+    </div>
+  );
+}
+
+// ─── Fundamentals row (AskAnalyst data) ────────────────────────────────────
+function FundamentalsRow({ f }: { f: AskAnalystFundamentals | undefined }) {
+  if (!f) return null;
+
+  const pos52w =
+    f.fiftyTwoWeekHigh !== null &&
+    f.fiftyTwoWeekLow !== null &&
+    f.fiftyTwoWeekHigh > f.fiftyTwoWeekLow
+      ? Math.round(
+          ((f.currentPrice - f.fiftyTwoWeekLow) /
+            (f.fiftyTwoWeekHigh - f.fiftyTwoWeekLow)) *
+            100
+        )
+      : null;
+
+  const chips: [string, string, string][] = [];
+  if (f.pe !== null)
+    chips.push(["P/E", `${f.pe.toFixed(1)}x`, f.pe < 8 ? C.greenText : f.pe > 20 ? C.amberText : C.text]);
+  if (f.pbv !== null)
+    chips.push(["PBV", `${f.pbv.toFixed(1)}x`, C.muted]);
+  if (f.dividendYield !== null && f.dividendYield > 0)
+    chips.push(["Div", `${f.dividendYield.toFixed(1)}%`, C.greenText]);
+  if (f.totalReturn1M !== null)
+    chips.push(["1M", `${f.totalReturn1M >= 0 ? "+" : ""}${f.totalReturn1M.toFixed(1)}%`,
+      f.totalReturn1M >= 0 ? C.greenText : C.redText]);
+  if (f.totalReturn1Y !== null)
+    chips.push(["1Y", `${f.totalReturn1Y >= 0 ? "+" : ""}${f.totalReturn1Y.toFixed(1)}%`,
+      f.totalReturn1Y >= 0 ? C.greenText : C.redText]);
+
+  return (
+    <div style={{ marginTop: 10, paddingTop: 8, borderTop: `0.5px solid ${C.border}` }}>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 8, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 2 }}>
+          Fundamentals
+        </span>
+        {chips.map(([lbl, val, col]) => (
+          <div key={lbl} style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 4, alignItems: "center" }}>
+            <span style={{ fontSize: 8, color: C.dim }}>{lbl}</span>
+            <span style={{ fontSize: 10, fontWeight: 500, color: col }}>{val}</span>
+          </div>
+        ))}
+        {pos52w !== null && (
+          <div style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 5, alignItems: "center" }}>
+            <span style={{ fontSize: 8, color: C.dim }}>52W</span>
+            <div style={{ width: 38, height: 3, background: C.border2, borderRadius: 2, position: "relative" }}>
+              <div style={{
+                position: "absolute", left: 0, top: 0, borderRadius: 2,
+                width: `${Math.min(100, pos52w)}%`, height: 3,
+                background: pos52w > 70 ? C.green : pos52w < 30 ? C.red : C.amber,
+              }} />
+            </div>
+            <span style={{ fontSize: 9, color: C.muted, minWidth: 24 }}>{pos52w}%</span>
+          </div>
+        )}
+        {f.marketCap !== null && f.marketCap > 0 && (
+          <div style={{ background: "#111", borderRadius: 4, padding: "3px 7px", display: "flex", gap: 4, alignItems: "center" }}>
+            <span style={{ fontSize: 8, color: C.dim }}>MCap</span>
+            <span style={{ fontSize: 10, fontWeight: 500, color: C.muted }}>
+              {f.marketCap >= 1_000 ? `${(f.marketCap / 1_000).toFixed(0)}B` : `${Math.round(f.marketCap)}M`}
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -335,6 +403,8 @@ export default function Dashboard() {
   const [watchTech, setWatchTech] = useState<Record<string, StockTech>>({});
   const [holdingTech, setHoldingTech] = useState<Record<string, StockTech>>({});
   const [loadingWatchTech, setLoadingWatchTech] = useState(false);
+  // AskAnalyst fundamentals (PE, PBV, div yield, 52W range, periodic returns)
+  const [askAnalystData, setAskAnalystData] = useState<Record<string, AskAnalystFundamentals>>({});
 
   // Sort states
   const [sortOpps, setSortOpps] = useState<"confidence" | "name">("confidence");
@@ -416,6 +486,10 @@ export default function Dashboard() {
       const newSignals: AISignal[] = data.signals ?? [];
       // Register scan tickers so the prices hook fetches them on next tick
       scanTickersRef.current = newSignals.map((s: AISignal) => s.ticker);
+      // Fetch fundamentals for all scan result tickers in background
+      if (newSignals.length > 0) {
+        fetchAskAnalystBatch(newSignals.map((s: AISignal) => s.ticker));
+      }
       setScanResult({
         signals: newSignals,
         newsAnalysis: data.newsAnalysis ?? null,
@@ -532,17 +606,18 @@ export default function Dashboard() {
       name: quote?.sector ? `${t} · ${quote.sector}` : t,
     }]);
     setNewWatch("");
-    // Auto-load technicals immediately — no need to click "Technicals"
+    // Auto-load technicals and fundamentals immediately
     fetchSingleWatchTech(t);
+    fetchAskAnalystBatch([t]);
   };
 
   // ── Quick-add from scan results (no PSX validation needed) ─────────────
   const quickAddWatch = (ticker: string) => {
     if (!watching.find(w => w.ticker === ticker)) {
       setWatching(prev => [...prev, { ticker, name: ticker }]);
-      // Auto-load technicals (tech data from the scan is already in watchTech
-      // via runWatchlistAI, but scanResult.technicalData might also have it)
+      // Auto-load technicals and fundamentals
       if (!watchTech[ticker]) fetchSingleWatchTech(ticker);
+      fetchAskAnalystBatch([ticker]);
     }
   };
 
@@ -553,6 +628,25 @@ export default function Dashboard() {
       if (res.ok) {
         const tech = await res.json();
         setWatchTech(prev => ({ ...prev, [ticker]: tech }));
+      }
+    } catch { /* ignore */ }
+  };
+
+  // ── Fetch AskAnalyst fundamentals for one or many tickers ─────────────────
+  const fetchAskAnalystBatch = async (tickers: string[]) => {
+    if (!tickers.length) return;
+    const fresh = tickers.filter(t => !askAnalystData[t]);
+    if (!fresh.length) return; // all already loaded
+    try {
+      const res = await fetch(`/api/askanalyst?symbol=${fresh.join(",")}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (fresh.length === 1) {
+        // Single-ticker response is the object itself
+        setAskAnalystData(prev => ({ ...prev, [fresh[0]]: data }));
+      } else {
+        // Batch response is { TICKER: {...}, ... }
+        setAskAnalystData(prev => ({ ...prev, ...data }));
       }
     } catch { /* ignore */ }
   };
@@ -572,6 +666,8 @@ export default function Dashboard() {
     );
     setWatchTech(prev => ({ ...prev, ...results }));
     setLoadingWatchTech(false);
+    // Also refresh fundamentals for watchlist
+    fetchAskAnalystBatch(watching.map(w => w.ticker));
   };
 
   // ── Fetch technicals for all holdings ──────────────────────────────────
@@ -589,11 +685,12 @@ export default function Dashboard() {
     setHoldingTech(prev => ({ ...prev, ...results }));
   }, [holdings]); // eslint-disable-line
 
-  // Auto-fetch holding tech when Holdings tab is opened
+  // Auto-fetch holding tech + fundamentals when Holdings tab is opened
   const prevTabRef = useRef<string>("");
   useEffect(() => {
     if (tab === "holdings" && prevTabRef.current !== "holdings") {
       fetchHoldingTech();
+      fetchAskAnalystBatch(holdings.map(h => h.ticker));
     }
     prevTabRef.current = tab;
   }, [tab]); // eslint-disable-line
@@ -938,6 +1035,9 @@ export default function Dashboard() {
                     </div>
                   )}
 
+                  {/* Fundamentals row (AskAnalyst) */}
+                  <FundamentalsRow f={askAnalystData[sig.ticker]} />
+
                   {/* Add to watchlist */}
                   <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
                     {watching.find(w => w.ticker === sig.ticker) ? (
@@ -1052,6 +1152,9 @@ export default function Dashboard() {
                       )}
                     </div>
                   )}
+
+                  {/* Fundamentals row (AskAnalyst) */}
+                  <FundamentalsRow f={askAnalystData[h.ticker]} />
 
                   {/* AI suggestion */}
                   {(() => {
@@ -1267,6 +1370,9 @@ export default function Dashboard() {
                       </div>
                     </div>
                   )}
+
+                  {/* ── Fundamentals row (AskAnalyst) ── */}
+                  <FundamentalsRow f={askAnalystData[w.ticker]} />
 
                   {/* ── Prompt when nothing loaded yet ── */}
                   {!tech && !activeSig && (
