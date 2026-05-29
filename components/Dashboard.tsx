@@ -867,6 +867,135 @@ export default function Dashboard() {
   const [showMetricsGuide, setShowMetricsGuide] = useState(false);
   const [signalDetail, setSignalDetail] = useState<SignalDetail | null>(null);
 
+  // Export for Claude
+  const [exportCopied, setExportCopied] = useState(false);
+
+  const exportForClaude = () => {
+    const lines: string[] = [];
+    const now = new Date().toLocaleString("en-PK", { timeZone: "Asia/Karachi", dateStyle: "medium", timeStyle: "short" });
+    lines.push(`=== PSX SCANNER SNAPSHOT — ${now} PKT ===`);
+    lines.push(`Market: KSE-100 · ${isPKTOpen() ? "OPEN" : "CLOSED"}\n`);
+
+    // Macro context
+    if (scanResult?.newsAnalysis) {
+      const na = scanResult.newsAnalysis;
+      lines.push("── MACRO CONTEXT ──────────────────────────────");
+      lines.push(na.summary);
+      if (na.affectedSectors.length > 0) {
+        lines.push("\nSector Impact:");
+        na.affectedSectors.forEach(s => {
+          const icon = s.impact === "POSITIVE" ? "▲" : s.impact === "NEGATIVE" ? "▼" : "–";
+          lines.push(`  ${icon} ${s.sectorName}: ${s.reason}`);
+        });
+      }
+      if (na.globalFactors.length > 0)
+        lines.push(`\nGlobal Factors: ${na.globalFactors.join(" · ")}`);
+      lines.push(`\nScan time: ${new Date(scanResult.timestamp).toLocaleTimeString("en-PK", { timeZone: "Asia/Karachi", hour: "2-digit", minute: "2-digit" })} PKT · ${scanResult.totalScanned} stocks scanned · ${scanResult.passedTechnicals} passed technicals`);
+    }
+
+    // Buy opportunities
+    if (scanResult?.signals.length) {
+      lines.push("\n── BUY OPPORTUNITIES ──────────────────────────");
+      scanResult.signals.forEach((sig, i) => {
+        const tech = scanResult.technicalData?.find(t => t.symbol === sig.ticker);
+        const fund = askAnalystData[sig.ticker];
+        const liveQ  = prices[sig.ticker];
+        const price  = liveQ?.currentPrice ?? tech?.currentPrice;
+        const chg    = liveQ?.changePercent;
+        lines.push(`\n${i + 1}. ${sig.ticker} — ${sig.signal} (${sig.confidence}% confidence)`);
+        if (price) lines.push(`   Price: PKR ${price.toFixed(2)}${chg !== undefined ? `  ${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% today` : ""}`);
+        lines.push(`   ${sig.reason}`);
+        if (tech) lines.push(`   Technicals: RSI ${tech.rsi.toFixed(0)} | EMA20 ${tech.ema20.toFixed(2)} | EMA50 ${tech.ema50.toFixed(2)} | Vol ${tech.volumeRatio.toFixed(1)}x avg | Score ${tech.compositeScore}/100 [${tech.technicalSignal}]`);
+        if (fund) {
+          const fp: string[] = [];
+          if (fund.pe !== null) fp.push(`PE ${fund.pe.toFixed(1)}x`);
+          if (fund.pbv !== null) fp.push(`PBV ${fund.pbv.toFixed(1)}x`);
+          if (fund.dividendYield !== null && fund.dividendYield > 0) fp.push(`Div ${fund.dividendYield.toFixed(1)}%`);
+          if (fund.totalReturn1Y !== null) fp.push(`1Y ${fund.totalReturn1Y >= 0 ? "+" : ""}${fund.totalReturn1Y.toFixed(1)}%`);
+          if (fund.marketCap !== null) fp.push(`MCap ${fund.marketCap >= 1000 ? `${(fund.marketCap/1000).toFixed(0)}B` : `${Math.round(fund.marketCap)}M`}`);
+          if (fp.length) lines.push(`   Fundamentals: ${fp.join(" | ")}`);
+        }
+        if (sig.suggestedEntry) lines.push(`   Suggested entry: ${sig.suggestedEntry}`);
+        if (sig.newsHeadline && sig.newsHeadline !== "No recent news") lines.push(`   News: ${sig.newsHeadline}`);
+        if (sig.catalysts?.length) lines.push(`   Catalysts: ${sig.catalysts.join("; ")}`);
+        if (sig.risks?.length) lines.push(`   Risks: ${sig.risks.join("; ")}`);
+      });
+    }
+
+    // Holdings
+    if (holdings.length > 0) {
+      lines.push("\n── MY HOLDINGS ─────────────────────────────────");
+      let totalCost = 0, totalVal = 0;
+      holdings.forEach(h => {
+        const live = prices[h.ticker]?.currentPrice ?? h.avgPrice;
+        const chgPct = prices[h.ticker]?.changePercent;
+        const cost = h.avgPrice * h.shares;
+        const mv   = live * h.shares;
+        const pnl  = mv - cost;
+        const pct  = cost > 0 ? (pnl / cost) * 100 : 0;
+        totalCost += cost; totalVal += mv;
+        const fund = askAnalystData[h.ticker];
+        const tech = holdingTech[h.ticker];
+        lines.push(`\n  ${h.ticker}${h.shariah ? " [KMI-30]" : ""} — ${h.name}`);
+        lines.push(`    ${h.shares.toLocaleString()} shares @ PKR ${h.avgPrice.toFixed(2)} avg cost`);
+        lines.push(`    Live: PKR ${live.toFixed(2)}${chgPct !== undefined ? `  (${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}% today)` : ""}`);
+        lines.push(`    P&L: ${pnl >= 0 ? "+" : ""}PKR ${Math.round(pnl).toLocaleString()}  (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`);
+        if (tech) lines.push(`    Technicals: RSI ${tech.rsi.toFixed(0)} | Score ${tech.compositeScore}/100 [${tech.technicalSignal}]`);
+        if (fund) {
+          const fp: string[] = [];
+          if (fund.pe !== null) fp.push(`PE ${fund.pe.toFixed(1)}x`);
+          if (fund.dividendYield !== null && fund.dividendYield > 0) fp.push(`Div ${fund.dividendYield.toFixed(1)}%`);
+          if (fund.totalReturn1Y !== null) fp.push(`1Y ${fund.totalReturn1Y >= 0 ? "+" : ""}${fund.totalReturn1Y.toFixed(1)}%`);
+          if (fp.length) lines.push(`    Fundamentals: ${fp.join(" | ")}`);
+        }
+      });
+      const tPnl = totalVal - totalCost;
+      const tPct = totalCost > 0 ? (tPnl / totalCost) * 100 : 0;
+      lines.push(`\n  Portfolio total: PKR ${Math.round(totalVal).toLocaleString()} value | PKR ${Math.round(totalCost).toLocaleString()} invested | P&L: ${tPnl >= 0 ? "+" : ""}PKR ${Math.round(tPnl).toLocaleString()} (${tPct >= 0 ? "+" : ""}${tPct.toFixed(2)}%)`);
+    }
+
+    // Watchlist
+    if (watching.length > 0) {
+      lines.push("\n── WATCHLIST ───────────────────────────────────");
+      watching.forEach(w => {
+        const p   = prices[w.ticker];
+        const sig = watchSignals[w.ticker] ?? scanResult?.signals.find(s => s.ticker === w.ticker);
+        const tech = watchTech[w.ticker];
+        const fund = askAnalystData[w.ticker];
+        lines.push(`\n  ${w.ticker} — ${w.name}`);
+        if (p) lines.push(`    Price: PKR ${p.currentPrice.toFixed(2)}  (${p.changePercent >= 0 ? "+" : ""}${p.changePercent.toFixed(2)}% today)`);
+        if (sig) lines.push(`    Signal: ${sig.signal} (${sig.confidence}% confidence) — ${sig.reason}`);
+        else if (tech) lines.push(`    Technicals: RSI ${tech.rsi.toFixed(0)} | Score ${tech.compositeScore}/100 [${tech.technicalSignal}]`);
+        if (fund) {
+          const fp: string[] = [];
+          if (fund.pe !== null) fp.push(`PE ${fund.pe.toFixed(1)}x`);
+          if (fund.dividendYield !== null && fund.dividendYield > 0) fp.push(`Div ${fund.dividendYield.toFixed(1)}%`);
+          if (fund.totalReturn1Y !== null) fp.push(`1Y ${fund.totalReturn1Y >= 0 ? "+" : ""}${fund.totalReturn1Y.toFixed(1)}%`);
+          if (fp.length) lines.push(`    Fundamentals: ${fp.join(" | ")}`);
+        }
+      });
+    }
+
+    lines.push("\n────────────────────────────────────────────────");
+    lines.push(`Data sources: PSX live prices · AskAnalyst.com.pk fundamentals · AI by ${settings.provider}`);
+    lines.push("Not financial advice — for reference and analysis only.");
+
+    navigator.clipboard.writeText(lines.join("\n")).then(() => {
+      setExportCopied(true);
+      setTimeout(() => setExportCopied(false), 2500);
+    }).catch(() => {
+      // Fallback: create a temporary textarea
+      const ta = document.createElement("textarea");
+      ta.value = lines.join("\n");
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setExportCopied(true);
+      setTimeout(() => setExportCopied(false), 2500);
+    });
+  };
+
   // UI state
   const [tab, setTab] = useState<"opportunities" | "holdings" | "watching">("opportunities");
   const [newHolding, setNewHolding] = useState({ ticker: "", shares: "", avg: "" });
@@ -1263,6 +1392,13 @@ export default function Dashboard() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <PKTClock />
           <button onClick={fetchPrices} style={btnSt}>↻</button>
+          <button
+            onClick={exportForClaude}
+            style={{ ...btnSt, fontSize: 10, padding: "4px 10px", borderColor: exportCopied ? C.green + "60" : C.blue + "60", color: exportCopied ? C.greenText : C.blueText }}
+            title="Copy a full snapshot of your scan results, holdings and watchlist — paste into Claude chat for AI analysis"
+          >
+            {exportCopied ? "✓ Copied!" : "⎘ Export for Claude"}
+          </button>
           <button
             onClick={() => setShowMetricsGuide(true)}
             style={{ ...btnSt, fontSize: 10, padding: "4px 10px", borderColor: C.purple + "60", color: C.purpleText }}
