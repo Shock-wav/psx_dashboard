@@ -663,11 +663,11 @@ function HoldingsOverview({ holdings, prices }: {
           </svg>
         </div>
 
-        {/* ── RIGHT: Companies + financial columns ── */}
+        {/* ── RIGHT: Companies bars + separated financial panel ── */}
         <div style={{ flex: 1, minWidth: 0 }}>
 
           {/* KPI summary line */}
-          <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
             <div style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
               <span style={{ fontSize: 8, color: C.dim }}>Value</span>
               <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>PKR {fmtPKR(totalMV)}</span>
@@ -685,54 +685,71 @@ function HoldingsOverview({ holdings, prices }: {
             </div>
           </div>
 
-          {/* COMPANIES section */}
-          <div style={{ fontSize: 8, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 7 }}>Companies</div>
+          {/* Main row: allocation bars (left) + financial panel (right) */}
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
 
-          {/* Per-holding rows: wide allocation bar + financial columns */}
-          {rows.map(r => {
-            const alloc = totalMV > 0 ? (r.marketVal / totalMV) * 100 : 0;
-            return (
-              <div key={r.ticker} style={{ display: "grid", gridTemplateColumns: "48px 1fr 46px 78px 80px 46px 46px", gap: "0 8px", alignItems: "center", marginBottom: 8 }}>
-                {/* Ticker */}
-                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, flexShrink: 0, display: "inline-block" }} />
-                  <span style={{ fontSize: 10, fontWeight: 600, color: C.text }}>{r.ticker}</span>
-                </div>
-                {/* Wide allocation bar */}
-                <div style={{ height: 6, background: C.border2, borderRadius: 3 }}>
-                  <div style={{ width: `${alloc}%`, height: 6, borderRadius: 3, background: r.color }} />
-                </div>
-                {/* Alloc % */}
-                <span style={{ fontSize: 9, color: C.muted, textAlign: "right" }}>{alloc.toFixed(1)}%</span>
-                {/* Invested */}
-                <span style={{ fontSize: 9, color: C.muted }}>PKR {fmtPKR(r.costBasis)}</span>
-                {/* P&L */}
-                <span style={{ fontSize: 9, fontWeight: 500, color: r.pnl >= 0 ? C.greenText : C.redText }}>
-                  {r.pnl >= 0 ? "+" : "-"}PKR {fmtPKR(r.pnl)}
-                </span>
-                {/* P&L % */}
-                <span style={{ fontSize: 9, color: r.pnlPct >= 0 ? C.greenText : C.redText }}>
-                  {r.pnlPct >= 0 ? "+" : ""}{r.pnlPct.toFixed(1)}%
-                </span>
-                {/* Today */}
-                <span style={{ fontSize: 9, color: r.changeToday !== undefined ? (r.changeToday >= 0 ? C.greenText : C.redText) : C.dim }}>
-                  {r.changeToday !== undefined ? `${r.changeToday >= 0 ? "+" : ""}${r.changeToday.toFixed(1)}%` : "—"}
-                </span>
+            {/* ── Allocation bars column ── */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {/* "COMPANIES" heading — same height as financial panel's header row */}
+              <div style={{ fontSize: 8, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, height: 22, display: "flex", alignItems: "center" }}>Companies</div>
+
+              {rows.map(r => {
+                const alloc = totalMV > 0 ? (r.marketVal / totalMV) * 100 : 0;
+                return (
+                  <div key={r.ticker} style={{ display: "flex", alignItems: "center", gap: 7, height: 28, marginBottom: 2 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, flexShrink: 0, display: "inline-block" }} />
+                    <span style={{ fontSize: 10, fontWeight: 600, color: C.text, width: 38, flexShrink: 0 }}>{r.ticker}</span>
+                    <div style={{ flex: 1, height: 6, background: C.border2, borderRadius: 3 }}>
+                      <div style={{ width: `${alloc}%`, height: 6, borderRadius: 3, background: r.color }} />
+                    </div>
+                    <span style={{ fontSize: 9, color: C.muted, width: 38, textAlign: "right", flexShrink: 0 }}>{alloc.toFixed(1)}%</span>
+                  </div>
+                );
+              })}
+
+              {/* Total label — aligned with financial panel's total row */}
+              <div style={{ height: 30, display: "flex", alignItems: "center", borderTop: `0.5px solid ${C.border}`, marginTop: 4 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.text }}>Total</span>
               </div>
-            );
-          })}
+            </div>
 
-          {/* Total row */}
-          <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 46px 78px 80px 46px 46px", gap: "0 8px", alignItems: "center", borderTop: `0.5px solid ${C.border}`, paddingTop: 6, marginTop: 2 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: C.text, gridColumn: "1/4" }}>Total</span>
-            <span style={{ fontSize: 9, color: C.muted }}>PKR {fmtPKR(totalCost)}</span>
-            <span style={{ fontSize: 10, fontWeight: 600, color: totalPnl >= 0 ? C.greenText : C.redText }}>
-              {totalPnl >= 0 ? "+" : "-"}PKR {fmtPKR(totalPnl)}
-            </span>
-            <span style={{ fontSize: 9, fontWeight: 600, color: totalPct >= 0 ? C.greenText : C.redText }}>
-              {totalPct >= 0 ? "+" : ""}{totalPct.toFixed(1)}%
-            </span>
-            <span />
+            {/* ── Financial mini-panel ── */}
+            <div style={{ flexShrink: 0, background: "#0d0d0d", border: `0.5px solid ${C.border2}`, borderRadius: 7, padding: "6px 12px" }}>
+              {/* Column headers */}
+              <div style={{ display: "grid", gridTemplateColumns: "74px 84px 44px 44px", gap: "0 10px", height: 22, alignItems: "center" }}>
+                {["Invested", "Unrealised P&L", "P&L %", "Today"].map(h => (
+                  <span key={h} style={{ fontSize: 7, color: C.dim, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</span>
+                ))}
+              </div>
+
+              {/* Per-holding rows */}
+              {rows.map(r => (
+                <div key={r.ticker} style={{ display: "grid", gridTemplateColumns: "74px 84px 44px 44px", gap: "0 10px", height: 28, alignItems: "center", marginBottom: 2 }}>
+                  <span style={{ fontSize: 9, color: C.muted }}>PKR {fmtPKR(r.costBasis)}</span>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: r.pnl >= 0 ? C.greenText : C.redText }}>
+                    {r.pnl >= 0 ? "+" : "-"}PKR {fmtPKR(r.pnl)}
+                  </span>
+                  <span style={{ fontSize: 9, color: r.pnlPct >= 0 ? C.greenText : C.redText }}>
+                    {r.pnlPct >= 0 ? "+" : ""}{r.pnlPct.toFixed(1)}%
+                  </span>
+                  <span style={{ fontSize: 9, color: r.changeToday !== undefined ? (r.changeToday >= 0 ? C.greenText : C.redText) : C.dim }}>
+                    {r.changeToday !== undefined ? `${r.changeToday >= 0 ? "+" : ""}${r.changeToday.toFixed(1)}%` : "—"}
+                  </span>
+                </div>
+              ))}
+
+              {/* Total row */}
+              <div style={{ display: "grid", gridTemplateColumns: "74px 84px 44px 44px", gap: "0 10px", height: 30, alignItems: "center", borderTop: `0.5px solid ${C.border}`, marginTop: 4 }}>
+                <span style={{ fontSize: 9, color: C.muted }}>PKR {fmtPKR(totalCost)}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: totalPnl >= 0 ? C.greenText : C.redText }}>
+                  {totalPnl >= 0 ? "+" : "-"}PKR {fmtPKR(totalPnl)}
+                </span>
+                <span style={{ fontSize: 9, fontWeight: 700, color: totalPct >= 0 ? C.greenText : C.redText }}>
+                  {totalPct >= 0 ? "+" : ""}{totalPct.toFixed(1)}%
+                </span>
+                <span />
+              </div>
+            </div>
           </div>
 
           {/* SECTORS row */}
