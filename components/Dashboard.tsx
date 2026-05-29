@@ -582,128 +582,183 @@ function resolveSectorName(raw: string): string {
   return SECTOR_CODE_TO_NAME[raw.trim()] ?? raw;
 }
 
-// ─── Holdings breakdown chart (pure SVG, zero dependencies) ──────────────
+// ─── Holdings overview: donut chart + portfolio calculations table ─────────────
 const PIE_COLORS = [C.green, C.blue, C.amber, C.purple, "#c08060", "#60b0c0", "#a0c060", "#c060a0"];
 
-/** Build an SVG donut path. Handles the full-circle (100%) edge case by
- *  splitting into two 180° arcs — identical start/end breaks SVG arc rendering. */
-function donutPath(cx: number, cy: number, R: number, ir: number, a0: number, frac: number): string {
-  if (frac >= 0.9999) {
-    const mid = a0 + Math.PI;
-    const [x0,y0,xm,ym] = [cx+R*Math.cos(a0), cy+R*Math.sin(a0), cx+R*Math.cos(mid), cy+R*Math.sin(mid)];
-    const [ix0,iy0,ixm,iym] = [cx+ir*Math.cos(a0), cy+ir*Math.sin(a0), cx+ir*Math.cos(mid), cy+ir*Math.sin(mid)];
-    return [
-      `M ${x0.toFixed(2)} ${y0.toFixed(2)}`,
-      `A ${R} ${R} 0 1 1 ${xm.toFixed(2)} ${ym.toFixed(2)}`,
-      `A ${R} ${R} 0 1 1 ${x0.toFixed(2)} ${y0.toFixed(2)}`,
-      `L ${ix0.toFixed(2)} ${iy0.toFixed(2)}`,
-      `A ${ir} ${ir} 0 1 0 ${ixm.toFixed(2)} ${iym.toFixed(2)}`,
-      `A ${ir} ${ir} 0 1 0 ${ix0.toFixed(2)} ${iy0.toFixed(2)}`,
-      "Z",
-    ].join(" ");
-  }
-  const a1 = a0 + frac * 2 * Math.PI;
-  const large = frac > 0.5 ? 1 : 0;
-  return [
-    `M ${(cx+R*Math.cos(a0)).toFixed(2)} ${(cy+R*Math.sin(a0)).toFixed(2)}`,
-    `A ${R} ${R} 0 ${large} 1 ${(cx+R*Math.cos(a1)).toFixed(2)} ${(cy+R*Math.sin(a1)).toFixed(2)}`,
-    `L ${(cx+ir*Math.cos(a1)).toFixed(2)} ${(cy+ir*Math.sin(a1)).toFixed(2)}`,
-    `A ${ir} ${ir} 0 ${large} 0 ${(cx+ir*Math.cos(a0)).toFixed(2)} ${(cy+ir*Math.sin(a0)).toFixed(2)}`,
-    "Z",
-  ].join(" ");
+function polarToCart(cx: number, cy: number, r: number, deg: number) {
+  const rad = (deg - 90) * Math.PI / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+function donutSlicePath(cx: number, cy: number, r: number, ir: number, startDeg: number, endDeg: number): string {
+  const gap = Math.min(1.5, (endDeg - startDeg) * 0.04);
+  const s1 = polarToCart(cx, cy, r,  startDeg + gap);
+  const e1 = polarToCart(cx, cy, r,  endDeg   - gap);
+  const s2 = polarToCart(cx, cy, ir, endDeg   - gap);
+  const e2 = polarToCart(cx, cy, ir, startDeg + gap);
+  const large = (endDeg - startDeg) > 180 ? 1 : 0;
+  return `M ${s1.x.toFixed(2)} ${s1.y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${e1.x.toFixed(2)} ${e1.y.toFixed(2)} L ${s2.x.toFixed(2)} ${s2.y.toFixed(2)} A ${ir} ${ir} 0 ${large} 0 ${e2.x.toFixed(2)} ${e2.y.toFixed(2)} Z`;
 }
 
-interface HoldingForPie { ticker: string; name: string; shares: number; avgPrice: number; }
-function HoldingsPieChart({ holdings, prices }: {
-  holdings: HoldingForPie[];
-  prices: Record<string, { currentPrice?: number }>;
+function HoldingsOverview({ holdings, prices }: {
+  holdings: Holding[];
+  prices: Record<string, StockQuote>;
 }) {
   if (holdings.length === 0) return null;
 
-  // Per-company values
-  let total = 0;
-  const compEntries = holdings.map(h => {
-    const val = (prices[h.ticker]?.currentPrice ?? h.avgPrice) * h.shares;
-    total += val;
-    return { ticker: h.ticker, name: h.name, val };
-  }).sort((a, b) => b.val - a.val);
-  if (total === 0) return null;
+  const fmtPKR = (v: number) =>
+    Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toFixed(2)}M`
+    : Math.abs(v) >= 1_000   ? `${(v / 1_000).toFixed(1)}K`
+    : Math.round(Math.abs(v)).toString();
 
-  // Per-sector values
-  const sectorMap: Record<string, number> = {};
-  for (const h of holdings) {
-    const val = (prices[h.ticker]?.currentPrice ?? h.avgPrice) * h.shares;
-    const rawSector = h.name.includes(" · ") ? h.name.split(" · ").slice(1).join(" · ") : "Other";
-    const sector = resolveSectorName(rawSector);
-    sectorMap[sector] = (sectorMap[sector] ?? 0) + val;
-  }
-  const sectorEntries = Object.entries(sectorMap).sort((a, b) => b[1] - a[1]);
-
-  // Donut uses companies as slices
-  const cx = 55, cy = 55, R = 46, ir = 26;
-  let angle = -Math.PI / 2;
-  const slices = compEntries.map((e, i) => {
-    const frac = e.val / total;
-    const d = donutPath(cx, cy, R, ir, angle, frac);
-    angle += frac * 2 * Math.PI;
-    return { ...e, frac, d, color: PIE_COLORS[i % PIE_COLORS.length] };
+  const rows = holdings.map((h, i) => {
+    const livePrice  = prices[h.ticker]?.currentPrice ?? h.avgPrice;
+    const changeToday = prices[h.ticker]?.changePercent;
+    const marketVal  = livePrice * h.shares;
+    const costBasis  = h.avgPrice * h.shares;
+    const pnl        = marketVal - costBasis;
+    const pnlPct     = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+    return { ticker: h.ticker, name: h.name, marketVal, costBasis, pnl, pnlPct, changeToday, color: PIE_COLORS[i % PIE_COLORS.length] };
   });
 
-  const partial = holdings.some(h => !prices[h.ticker]?.currentPrice);
+  const totalMV   = rows.reduce((s, r) => s + r.marketVal, 0);
+  const totalCost = rows.reduce((s, r) => s + r.costBasis, 0);
+  const totalPnl  = totalMV - totalCost;
+  const totalPct  = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+
+  // Donut slices
+  const cx = 64, cy = 64, R = 55, ir = 33;
+  let degCursor = 0;
+  const slices = rows.map(r => {
+    const frac   = totalMV > 0 ? r.marketVal / totalMV : 1 / rows.length;
+    const span   = frac * 360;
+    const path   = donutSlicePath(cx, cy, R, ir, degCursor, degCursor + span);
+    degCursor   += span;
+    return { ...r, path };
+  });
+
+  // Sector map for legend
+  const sectorMap: Record<string, number> = {};
+  for (const r of rows) {
+    const raw    = r.name.includes(" · ") ? r.name.split(" · ").slice(1).join(" · ") : "Other";
+    const sector = resolveSectorName(raw);
+    sectorMap[sector] = (sectorMap[sector] ?? 0) + r.marketVal;
+  }
+  const sectors = Object.entries(sectorMap).sort((a, b) => b[1] - a[1]);
 
   return (
     <div style={{ background: "#111", borderRadius: 8, padding: "12px 14px", marginBottom: 14 }}>
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
-        {/* Donut */}
-        <svg width={110} height={110} viewBox="0 0 110 110" style={{ flexShrink: 0 }}>
-          {slices.map((s, i) => (
-            <path key={i} d={s.d} fill={s.color} opacity={0.85} stroke={C.bg} strokeWidth={1.5} />
-          ))}
-          <text x={cx} y={cy - 3} textAnchor="middle" fill={C.dim} fontSize={8}>Portfolio</text>
-          <text x={cx} y={cy + 9} textAnchor="middle" fill={C.text} fontSize={9} fontWeight="600">
-            PKR {total >= 1_000_000 ? `${(total/1_000_000).toFixed(1)}M` : `${Math.round(total/1000)}K`}
-          </text>
-        </svg>
+      <div style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
 
-        {/* Breakdowns */}
-        <div style={{ flex: 1, minWidth: 160 }}>
-          {/* Companies */}
-          <div style={{ ...s_label, marginBottom: 5 }}>Companies</div>
-          {slices.map((s, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0, display: "inline-block" }} />
-              <span style={{ fontSize: 10, fontWeight: 500, color: C.text, minWidth: 36 }}>{s.ticker}</span>
-              <div style={{ flex: 1, height: 2, background: C.border2, borderRadius: 1 }}>
-                <div style={{ width: `${s.frac * 100}%`, height: 2, background: s.color, borderRadius: 1 }} />
+        {/* ── LEFT: Donut chart + stock legend ── */}
+        <div style={{ flexShrink: 0, width: 150 }}>
+          <svg width={128} height={128} style={{ display: "block", margin: "0 auto 8px" }}>
+            {slices.map((s, i) => (
+              <path key={i} d={s.path} fill={s.color} />
+            ))}
+            {/* Centre labels */}
+            <text x={cx} y={cy - 9}  textAnchor="middle" fill={C.text}  fontSize={9}  fontWeight={700}>{fmtPKR(totalMV)}</text>
+            <text x={cx} y={cy + 3}  textAnchor="middle" fill={C.dim}   fontSize={7}>PKR total</text>
+            <text x={cx} y={cy + 15} textAnchor="middle" fill={totalPnl >= 0 ? C.greenText : C.redText} fontSize={8} fontWeight={600}>
+              {totalPnl >= 0 ? "+" : "-"}{fmtPKR(totalPnl)}
+            </text>
+          </svg>
+          {/* Stock legend */}
+          {slices.map(s => {
+            const alloc = totalMV > 0 ? (s.marketVal / totalMV * 100).toFixed(1) : "0";
+            return (
+              <div key={s.ticker} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0, display: "inline-block" }} />
+                <span style={{ fontSize: 10, fontWeight: 600, color: C.text }}>{s.ticker}</span>
+                <span style={{ fontSize: 9, color: C.dim, marginLeft: "auto" }}>{alloc}%</span>
               </div>
-              <span style={{ fontSize: 10, color: C.text, fontWeight: 500, minWidth: 38, textAlign: "right" }}>
-                {(s.frac * 100).toFixed(1)}%
-              </span>
-            </div>
-          ))}
-
-          {/* Sectors — only show when >1 company maps to a sector */}
-          {sectorEntries.length > 0 && (
-            <div style={{ marginTop: 10, paddingTop: 8, borderTop: `0.5px solid ${C.border}` }}>
-              <div style={{ ...s_label, marginBottom: 5 }}>Sectors</div>
-              {sectorEntries.map(([sector, val], i) => {
-                const frac = val / total;
+            );
+          })}
+          {/* Sector breakdown */}
+          {sectors.length > 0 && (
+            <div style={{ marginTop: 7, paddingTop: 6, borderTop: `0.5px solid ${C.border}` }}>
+              <div style={{ fontSize: 7, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Sectors</div>
+              {sectors.map(([sector, val], i) => {
+                const pct = totalMV > 0 ? ((val / totalMV) * 100).toFixed(0) : "0";
                 return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0, display: "inline-block" }} />
-                    <span style={{ fontSize: 10, color: C.muted, flex: 1, lineHeight: 1.3 }}>{sector}</span>
-                    <span style={{ fontSize: 10, color: C.text, fontWeight: 500, minWidth: 38, textAlign: "right" }}>
-                      {(frac * 100).toFixed(1)}%
-                    </span>
+                  <div key={sector} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0, display: "inline-block" }} />
+                    <span style={{ fontSize: 9, color: C.muted }}>{sector}</span>
+                    <span style={{ fontSize: 9, color: C.text, fontWeight: 500, marginLeft: "auto" }}>{pct}%</span>
                   </div>
                 );
               })}
             </div>
           )}
+        </div>
 
-          <div style={{ marginTop: 8, fontSize: 9, color: C.dim }}>
-            Total: PKR {Math.round(total).toLocaleString()}
-            {partial && " · prices partially loading"}
+        {/* ── RIGHT: Portfolio calculations table ── */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Header KPIs */}
+          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 5, alignItems: "baseline" }}>
+              <span style={{ fontSize: 8, color: C.dim }}>Value</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>PKR {fmtPKR(totalMV)}</span>
+            </div>
+            <div style={{ display: "flex", gap: 5, alignItems: "baseline" }}>
+              <span style={{ fontSize: 8, color: C.dim }}>Invested</span>
+              <span style={{ fontSize: 10, color: C.muted }}>PKR {fmtPKR(totalCost)}</span>
+            </div>
+            <div style={{ display: "flex", gap: 5, alignItems: "baseline" }}>
+              <span style={{ fontSize: 8, color: C.dim }}>P&L</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: totalPnl >= 0 ? C.greenText : C.redText }}>
+                {totalPnl >= 0 ? "+" : "-"}PKR {fmtPKR(totalPnl)}
+              </span>
+              <span style={{ fontSize: 9, color: totalPct >= 0 ? C.greenText : C.redText }}>
+                ({totalPct >= 0 ? "+" : ""}{totalPct.toFixed(1)}%)
+              </span>
+            </div>
+          </div>
+
+          {/* Column headers */}
+          <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 68px 86px 42px 42px", gap: "2px 6px", marginBottom: 5 }}>
+            {["Stock", "Allocation", "Invested", "Unrealised P&L", "P&L%", "Today"].map(h => (
+              <span key={h} style={{ fontSize: 7, color: C.dim, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</span>
+            ))}
+          </div>
+
+          {/* Per-holding rows */}
+          {rows.map(r => {
+            const alloc = totalMV > 0 ? (r.marketVal / totalMV) * 100 : 0;
+            return (
+              <div key={r.ticker} style={{ display: "grid", gridTemplateColumns: "44px 1fr 68px 86px 42px 42px", gap: "2px 6px", alignItems: "center", marginBottom: 5 }}>
+                <span style={{ fontSize: 10, fontWeight: 600, color: C.text }}>{r.ticker}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <div style={{ flex: 1, height: 4, background: C.border2, borderRadius: 2 }}>
+                    <div style={{ width: `${alloc}%`, height: 4, borderRadius: 2, background: r.color }} />
+                  </div>
+                  <span style={{ fontSize: 8, color: C.muted, minWidth: 28, textAlign: "right" }}>{alloc.toFixed(0)}%</span>
+                </div>
+                <span style={{ fontSize: 9, color: C.muted }}>PKR {fmtPKR(r.costBasis)}</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: r.pnl >= 0 ? C.greenText : C.redText }}>
+                  {r.pnl >= 0 ? "+" : "-"}PKR {fmtPKR(r.pnl)}
+                </span>
+                <span style={{ fontSize: 9, color: r.pnlPct >= 0 ? C.greenText : C.redText }}>
+                  {r.pnlPct >= 0 ? "+" : ""}{r.pnlPct.toFixed(1)}%
+                </span>
+                <span style={{ fontSize: 8, color: r.changeToday !== undefined ? (r.changeToday >= 0 ? C.greenText : C.redText) : C.dim }}>
+                  {r.changeToday !== undefined ? `${r.changeToday >= 0 ? "+" : ""}${r.changeToday.toFixed(1)}%` : "—"}
+                </span>
+              </div>
+            );
+          })}
+
+          {/* Total row */}
+          <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 68px 86px 42px 42px", gap: "2px 6px", alignItems: "center", borderTop: `0.5px solid ${C.border}`, paddingTop: 5, marginTop: 2 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: C.text }}>Total</span>
+            <span style={{ fontSize: 8, color: C.dim }}>{holdings.length} stock{holdings.length !== 1 ? "s" : ""}</span>
+            <span style={{ fontSize: 9, color: C.muted }}>PKR {fmtPKR(totalCost)}</span>
+            <span style={{ fontSize: 10, fontWeight: 600, color: totalPnl >= 0 ? C.greenText : C.redText }}>
+              {totalPnl >= 0 ? "+" : "-"}PKR {fmtPKR(totalPnl)}
+            </span>
+            <span style={{ fontSize: 9, fontWeight: 600, color: totalPct >= 0 ? C.greenText : C.redText }}>
+              {totalPct >= 0 ? "+" : ""}{totalPct.toFixed(1)}%
+            </span>
+            <span />
           </div>
         </div>
       </div>
@@ -812,6 +867,8 @@ export default function Dashboard() {
   const [watchError, setWatchError] = useState("");
   const [addingHolding, setAddingHolding] = useState(false);
   const [addingWatch, setAddingWatch] = useState(false);
+  // Inline edit for holdings
+  const [editingHolding, setEditingHolding] = useState<{ ticker: string; shares: string; avg: string } | null>(null);
   // Two-step delete confirmations
   const [pendingDeleteHolding, setPendingDeleteHolding] = useState<string | null>(null);
   const [pendingDeleteWatch, setPendingDeleteWatch] = useState<string | null>(null);
@@ -970,13 +1027,18 @@ export default function Dashboard() {
     if (quote) setPrices(prev => ({ ...prev, [t]: quote }));
     setHoldings(prev => [...prev.filter(h => h.ticker !== t), {
       ticker: t,
-      name: quote?.sector ? `${t} · ${quote.sector}` : t,
+      name: quote?.sector ? `${t} · ${resolveSectorName(quote.sector)}` : t,
       shares,
       avgPrice: avg,
       shariah: isShariah,
     }]);
     setNewHolding({ ticker: "", shares: "", avg: "" });
+    // Load fundamentals + technicals immediately so chips show right away
     fetchAskAnalystBatch([t]);
+    fetch(`/api/technicals?symbol=${t}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(tech => { if (tech) setHoldingTech(prev => ({ ...prev, [t]: tech })); })
+      .catch(() => {});
   };
 
   const addWatch = async () => {
@@ -994,7 +1056,7 @@ export default function Dashboard() {
     if (quote) setPrices(prev => ({ ...prev, [t]: quote }));
     setWatching(prev => [...prev, {
       ticker: t,
-      name: quote?.sector ? `${t} · ${quote.sector}` : t,
+      name: quote?.sector ? `${t} · ${resolveSectorName(quote.sector)}` : t,
     }]);
     setNewWatch("");
     // Auto-load technicals and fundamentals immediately
@@ -1479,9 +1541,9 @@ export default function Dashboard() {
         {/* ── HOLDINGS TAB ── */}
         {tab === "holdings" && (
           <div>
-            {/* Pie chart — only when 2+ distinct sectors */}
+            {/* Holdings overview: donut + portfolio table */}
             {holdings.length > 0 && (
-              <HoldingsPieChart holdings={holdings} prices={prices} />
+              <HoldingsOverview holdings={holdings} prices={prices} />
             )}
             <div style={{ ...s_label, marginBottom: 10 }}>My Holdings</div>
             {holdings.map(h => {
@@ -1492,6 +1554,7 @@ export default function Dashboard() {
               const pnl = marketVal ? marketVal - cost : null;
               const pnlPct = pnl ? (pnl / cost) * 100 : null;
               const tech = holdingTech[h.ticker];
+              const isEditing = editingHolding?.ticker === h.ticker;
               return (
                 <div key={h.ticker} style={cardStyle}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
@@ -1503,12 +1566,19 @@ export default function Dashboard() {
                       </div>
                       <div style={{ fontSize: 10, color: C.muted }}>{h.name}</div>
                     </div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                       {livePrice && <span style={{ fontSize: 13, fontWeight: 500 }}>PKR {livePrice.toFixed(2)}</span>}
                       {p?.changePercent !== undefined && (
                         <span style={{ fontSize: 10, color: p.changePercent >= 0 ? C.greenText : C.redText }}>
                           {p.changePercent >= 0 ? "+" : ""}{p.changePercent.toFixed(2)}%
                         </span>
+                      )}
+                      {/* Edit button */}
+                      {!isEditing && pendingDeleteHolding !== h.ticker && (
+                        <button
+                          onClick={() => setEditingHolding({ ticker: h.ticker, shares: String(h.shares), avg: String(h.avgPrice) })}
+                          style={{ ...btnSt, padding: "0 7px", fontSize: 11, color: C.dim }}
+                          title="Edit shares / avg price">✎</button>
                       )}
                       {pendingDeleteHolding === h.ticker ? (
                         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -1523,13 +1593,57 @@ export default function Dashboard() {
                           </button>
                         </div>
                       ) : (
-                        <button onClick={() => setPendingDeleteHolding(h.ticker)}
-                          style={{ ...btnSt, padding: "0 6px", fontSize: 15, color: C.dim }}>×</button>
+                        !isEditing && (
+                          <button onClick={() => setPendingDeleteHolding(h.ticker)}
+                            style={{ ...btnSt, padding: "0 6px", fontSize: 15, color: C.dim }}>×</button>
+                        )
                       )}
                     </div>
                   </div>
 
-                  {/* P&L grid */}
+                  {/* Inline edit form */}
+                  {isEditing ? (
+                    <div style={{ background: "#0d0d0d", borderRadius: 6, padding: "10px 12px", marginBottom: 4 }}>
+                      <div style={{ fontSize: 9, color: C.dim, marginBottom: 8 }}>Edit {h.ticker}</div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <span style={{ fontSize: 8, color: C.dim }}>Shares</span>
+                          <input
+                            style={{ ...inputSt, width: 80 }}
+                            type="text" inputMode="numeric"
+                            value={editingHolding!.shares}
+                            onChange={e => setEditingHolding(prev => prev ? { ...prev, shares: e.target.value.replace(/[^0-9.]/g, "") } : null)}
+                          />
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <span style={{ fontSize: 8, color: C.dim }}>Avg Price (PKR)</span>
+                          <input
+                            style={{ ...inputSt, width: 90 }}
+                            type="text" inputMode="numeric"
+                            value={editingHolding!.avg}
+                            onChange={e => setEditingHolding(prev => prev ? { ...prev, avg: e.target.value.replace(/[^0-9.]/g, "") } : null)}
+                          />
+                        </div>
+                        <div style={{ display: "flex", gap: 6, alignItems: "flex-end", paddingBottom: 1 }}>
+                          <button
+                            onClick={() => {
+                              const newShares = parseFloat(editingHolding!.shares);
+                              const newAvg    = parseFloat(editingHolding!.avg);
+                              if (!newShares || newShares <= 0 || !newAvg || newAvg <= 0) return;
+                              setHoldings(prev => prev.map(x =>
+                                x.ticker === h.ticker ? { ...x, shares: newShares, avgPrice: newAvg } : x
+                              ));
+                              setEditingHolding(null);
+                            }}
+                            style={{ ...accentBtn, fontSize: 10, padding: "4px 12px" }}>
+                            Save
+                          </button>
+                          <button onClick={() => setEditingHolding(null)} style={{ ...btnSt, fontSize: 10 }}>Cancel</button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                  /* P&L grid */
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
                     {[
                       ["Shares", h.shares.toLocaleString()],
@@ -1545,6 +1659,7 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
+                  )}
 
                   {/* Technical indicators row */}
                   {tech && (
