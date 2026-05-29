@@ -893,87 +893,111 @@ export default function Dashboard() {
       lines.push(`\nScan time: ${new Date(scanResult.timestamp).toLocaleTimeString("en-PK", { timeZone: "Asia/Karachi", hour: "2-digit", minute: "2-digit" })} PKT · ${scanResult.totalScanned} stocks scanned · ${scanResult.passedTechnicals} passed technicals`);
     }
 
-    // Buy opportunities
-    if (scanResult?.signals.length) {
-      lines.push("\n── BUY OPPORTUNITIES ──────────────────────────");
-      scanResult.signals.forEach((sig, i) => {
-        const tech = scanResult.technicalData?.find(t => t.symbol === sig.ticker);
-        const fund = askAnalystData[sig.ticker];
-        const liveQ  = prices[sig.ticker];
-        const price  = liveQ?.currentPrice ?? tech?.currentPrice;
-        const chg    = liveQ?.changePercent;
-        lines.push(`\n${i + 1}. ${sig.ticker} — ${sig.signal} (${sig.confidence}% confidence)`);
-        if (price) lines.push(`   Price: PKR ${price.toFixed(2)}${chg !== undefined ? `  ${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% today` : ""}`);
-        lines.push(`   ${sig.reason}`);
-        if (tech) lines.push(`   Technicals: RSI ${tech.rsi.toFixed(0)} | EMA20 ${tech.ema20.toFixed(2)} | EMA50 ${tech.ema50.toFixed(2)} | Vol ${tech.volumeRatio.toFixed(1)}x avg | Score ${tech.compositeScore}/100 [${tech.technicalSignal}]`);
+    // ── Build a unified per-ticker map across all three sections ──
+    // Each ticker appears exactly once; tags show which sections it belongs to.
+    type TickerEntry = {
+      name: string;
+      shariah: boolean;
+      inHoldings: boolean;
+      inSignals: boolean;
+      inWatching: boolean;
+      holding?: typeof holdings[0];
+      signal?: typeof scanResult extends null ? never : NonNullable<typeof scanResult>["signals"][0];
+    };
+    const tickerMap = new Map<string, TickerEntry>();
+
+    holdings.forEach(h => {
+      tickerMap.set(h.ticker, { name: h.name, shariah: !!h.shariah, inHoldings: true, inSignals: false, inWatching: false, holding: h });
+    });
+
+    scanResult?.signals.forEach(sig => {
+      const ex = tickerMap.get(sig.ticker);
+      if (ex) {
+        ex.inSignals = true; ex.signal = sig;
+      } else {
+        tickerMap.set(sig.ticker, { name: sig.ticker, shariah: false, inHoldings: false, inSignals: true, inWatching: false, signal: sig });
+      }
+    });
+
+    watching.forEach(w => {
+      const ex = tickerMap.get(w.ticker);
+      if (ex) { ex.inWatching = true; if (!ex.name || ex.name === w.ticker) ex.name = w.name; }
+      else tickerMap.set(w.ticker, { name: w.name, shariah: false, inHoldings: false, inSignals: false, inWatching: true });
+    });
+
+    // Sort: holdings first, then buy signals, then watchlist-only
+    const sorted = [...tickerMap.entries()].sort(([, a], [, b]) => {
+      const s = (e: TickerEntry) => (e.inHoldings ? 4 : 0) + (e.inSignals ? 2 : 0) + (e.inWatching ? 1 : 0);
+      return s(b) - s(a);
+    });
+
+    if (sorted.length > 0) {
+      lines.push("\n── STOCKS ──────────────────────────────────────");
+      sorted.forEach(([ticker, e], i) => {
+        const tags: string[] = [];
+        if (e.inHoldings) tags.push("HOLDING");
+        if (e.inSignals) tags.push("BUY SIGNAL");
+        if (e.inWatching) tags.push("WATCHING");
+        lines.push(`\n${i + 1}. ${ticker}${e.shariah ? " [KMI-30]" : ""} [${tags.join(" · ")}] — ${e.name}`);
+
+        // Live price
+        const live = prices[ticker];
+        if (live) lines.push(`   Price: PKR ${live.currentPrice.toFixed(2)}  (${live.changePercent >= 0 ? "+" : ""}${live.changePercent.toFixed(2)}% today)`);
+
+        // Holdings detail
+        if (e.holding) {
+          const h = e.holding;
+          const lp = live?.currentPrice ?? h.avgPrice;
+          const cost = h.avgPrice * h.shares;
+          const mv = lp * h.shares;
+          const pnl = mv - cost;
+          const pct = cost > 0 ? (pnl / cost) * 100 : 0;
+          lines.push(`   Holding: ${h.shares.toLocaleString()} shares @ PKR ${h.avgPrice.toFixed(2)} avg cost`);
+          lines.push(`   P&L: ${pnl >= 0 ? "+" : ""}PKR ${Math.round(pnl).toLocaleString()}  (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`);
+        }
+
+        // Buy signal detail
+        const sig = e.signal ?? watchSignals[ticker] ?? scanResult?.signals.find(s => s.ticker === ticker);
+        if (sig) {
+          lines.push(`   Signal: ${sig.signal} (${sig.confidence}% confidence) — ${sig.reason}`);
+          if (sig.suggestedEntry) lines.push(`   Entry: ${sig.suggestedEntry}`);
+          if (sig.newsHeadline && sig.newsHeadline !== "No recent news") lines.push(`   News: ${sig.newsHeadline}`);
+          if (sig.catalysts?.length) lines.push(`   Catalysts: ${sig.catalysts.join("; ")}`);
+          if (sig.risks?.length) lines.push(`   Risks: ${sig.risks.join("; ")}`);
+        }
+
+        // Technicals — check all sources
+        const tech = holdingTech[ticker] ?? watchTech[ticker] ?? scanResult?.technicalData?.find(t => t.symbol === ticker);
+        if (tech) {
+          const parts = [`RSI ${tech.rsi.toFixed(0)}`, `EMA20 ${tech.ema20.toFixed(2)}`, `Vol ${tech.volumeRatio.toFixed(1)}x avg`, `Score ${tech.compositeScore}/100 [${tech.technicalSignal}]`];
+          lines.push(`   Technicals: ${parts.join(" | ")}`);
+        }
+
+        // Fundamentals
+        const fund = askAnalystData[ticker];
         if (fund) {
           const fp: string[] = [];
           if (fund.pe !== null) fp.push(`PE ${fund.pe.toFixed(1)}x`);
           if (fund.pbv !== null) fp.push(`PBV ${fund.pbv.toFixed(1)}x`);
           if (fund.dividendYield !== null && fund.dividendYield > 0) fp.push(`Div ${fund.dividendYield.toFixed(1)}%`);
           if (fund.totalReturn1Y !== null) fp.push(`1Y ${fund.totalReturn1Y >= 0 ? "+" : ""}${fund.totalReturn1Y.toFixed(1)}%`);
-          if (fund.marketCap !== null) fp.push(`MCap ${fund.marketCap >= 1000 ? `${(fund.marketCap/1000).toFixed(0)}B` : `${Math.round(fund.marketCap)}M`}`);
+          if (fund.marketCap !== null) fp.push(`MCap ${fund.marketCap >= 1000 ? `${(fund.marketCap / 1000).toFixed(0)}B` : `${Math.round(fund.marketCap)}M`}`);
           if (fp.length) lines.push(`   Fundamentals: ${fp.join(" | ")}`);
         }
-        if (sig.suggestedEntry) lines.push(`   Suggested entry: ${sig.suggestedEntry}`);
-        if (sig.newsHeadline && sig.newsHeadline !== "No recent news") lines.push(`   News: ${sig.newsHeadline}`);
-        if (sig.catalysts?.length) lines.push(`   Catalysts: ${sig.catalysts.join("; ")}`);
-        if (sig.risks?.length) lines.push(`   Risks: ${sig.risks.join("; ")}`);
       });
     }
 
-    // Holdings
+    // Portfolio summary (holdings only)
     if (holdings.length > 0) {
-      lines.push("\n── MY HOLDINGS ─────────────────────────────────");
       let totalCost = 0, totalVal = 0;
       holdings.forEach(h => {
-        const live = prices[h.ticker]?.currentPrice ?? h.avgPrice;
-        const chgPct = prices[h.ticker]?.changePercent;
-        const cost = h.avgPrice * h.shares;
-        const mv   = live * h.shares;
-        const pnl  = mv - cost;
-        const pct  = cost > 0 ? (pnl / cost) * 100 : 0;
-        totalCost += cost; totalVal += mv;
-        const fund = askAnalystData[h.ticker];
-        const tech = holdingTech[h.ticker];
-        lines.push(`\n  ${h.ticker}${h.shariah ? " [KMI-30]" : ""} — ${h.name}`);
-        lines.push(`    ${h.shares.toLocaleString()} shares @ PKR ${h.avgPrice.toFixed(2)} avg cost`);
-        lines.push(`    Live: PKR ${live.toFixed(2)}${chgPct !== undefined ? `  (${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}% today)` : ""}`);
-        lines.push(`    P&L: ${pnl >= 0 ? "+" : ""}PKR ${Math.round(pnl).toLocaleString()}  (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`);
-        if (tech) lines.push(`    Technicals: RSI ${tech.rsi.toFixed(0)} | Score ${tech.compositeScore}/100 [${tech.technicalSignal}]`);
-        if (fund) {
-          const fp: string[] = [];
-          if (fund.pe !== null) fp.push(`PE ${fund.pe.toFixed(1)}x`);
-          if (fund.dividendYield !== null && fund.dividendYield > 0) fp.push(`Div ${fund.dividendYield.toFixed(1)}%`);
-          if (fund.totalReturn1Y !== null) fp.push(`1Y ${fund.totalReturn1Y >= 0 ? "+" : ""}${fund.totalReturn1Y.toFixed(1)}%`);
-          if (fp.length) lines.push(`    Fundamentals: ${fp.join(" | ")}`);
-        }
+        totalCost += h.avgPrice * h.shares;
+        totalVal += (prices[h.ticker]?.currentPrice ?? h.avgPrice) * h.shares;
       });
       const tPnl = totalVal - totalCost;
       const tPct = totalCost > 0 ? (tPnl / totalCost) * 100 : 0;
-      lines.push(`\n  Portfolio total: PKR ${Math.round(totalVal).toLocaleString()} value | PKR ${Math.round(totalCost).toLocaleString()} invested | P&L: ${tPnl >= 0 ? "+" : ""}PKR ${Math.round(tPnl).toLocaleString()} (${tPct >= 0 ? "+" : ""}${tPct.toFixed(2)}%)`);
-    }
-
-    // Watchlist
-    if (watching.length > 0) {
-      lines.push("\n── WATCHLIST ───────────────────────────────────");
-      watching.forEach(w => {
-        const p   = prices[w.ticker];
-        const sig = watchSignals[w.ticker] ?? scanResult?.signals.find(s => s.ticker === w.ticker);
-        const tech = watchTech[w.ticker];
-        const fund = askAnalystData[w.ticker];
-        lines.push(`\n  ${w.ticker} — ${w.name}`);
-        if (p) lines.push(`    Price: PKR ${p.currentPrice.toFixed(2)}  (${p.changePercent >= 0 ? "+" : ""}${p.changePercent.toFixed(2)}% today)`);
-        if (sig) lines.push(`    Signal: ${sig.signal} (${sig.confidence}% confidence) — ${sig.reason}`);
-        else if (tech) lines.push(`    Technicals: RSI ${tech.rsi.toFixed(0)} | Score ${tech.compositeScore}/100 [${tech.technicalSignal}]`);
-        if (fund) {
-          const fp: string[] = [];
-          if (fund.pe !== null) fp.push(`PE ${fund.pe.toFixed(1)}x`);
-          if (fund.dividendYield !== null && fund.dividendYield > 0) fp.push(`Div ${fund.dividendYield.toFixed(1)}%`);
-          if (fund.totalReturn1Y !== null) fp.push(`1Y ${fund.totalReturn1Y >= 0 ? "+" : ""}${fund.totalReturn1Y.toFixed(1)}%`);
-          if (fp.length) lines.push(`    Fundamentals: ${fp.join(" | ")}`);
-        }
-      });
+      lines.push(`\n── PORTFOLIO SUMMARY ───────────────────────────`);
+      lines.push(`Value: PKR ${Math.round(totalVal).toLocaleString()} | Invested: PKR ${Math.round(totalCost).toLocaleString()} | P&L: ${tPnl >= 0 ? "+" : ""}PKR ${Math.round(tPnl).toLocaleString()} (${tPct >= 0 ? "+" : ""}${tPct.toFixed(2)}%)`);
     }
 
     lines.push("\n────────────────────────────────────────────────");
@@ -984,7 +1008,6 @@ export default function Dashboard() {
       setExportCopied(true);
       setTimeout(() => setExportCopied(false), 2500);
     }).catch(() => {
-      // Fallback: create a temporary textarea
       const ta = document.createElement("textarea");
       ta.value = lines.join("\n");
       document.body.appendChild(ta);
