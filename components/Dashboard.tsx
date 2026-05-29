@@ -625,8 +625,8 @@ function HoldingsOverview({ holdings, prices }: {
   const totalPnl  = totalMV - totalCost;
   const totalPct  = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
-  // Donut slices
-  const cx = 64, cy = 64, R = 55, ir = 33;
+  // Donut slices — sized for 100×100 SVG
+  const cx = 50, cy = 50, R = 44, ir = 26;
   let degCursor = 0;
   const slices = rows.map(r => {
     const frac   = totalMV > 0 ? r.marketVal / totalMV : 1 / rows.length;
@@ -646,101 +646,76 @@ function HoldingsOverview({ holdings, prices }: {
   const sectors = Object.entries(sectorMap).sort((a, b) => b[1] - a[1]);
 
   return (
-    <div style={{ background: "#111", borderRadius: 8, padding: "12px 14px", marginBottom: 14 }}>
+    <div style={{ background: "#111", borderRadius: 8, padding: "14px 16px", marginBottom: 14 }}>
       <div style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
 
-        {/* ── LEFT: Donut chart + stock legend ── */}
-        <div style={{ flexShrink: 0, width: 150 }}>
-          <svg width={128} height={128} style={{ display: "block", margin: "0 auto 8px" }}>
+        {/* ── LEFT: Compact donut only ── */}
+        <div style={{ flexShrink: 0 }}>
+          <svg width={100} height={100}>
             {slices.map((s, i) => (
               <path key={i} d={s.path} fill={s.color} />
             ))}
-            {/* Centre labels */}
-            <text x={cx} y={cy - 9}  textAnchor="middle" fill={C.text}  fontSize={9}  fontWeight={700}>{fmtPKR(totalMV)}</text>
-            <text x={cx} y={cy + 3}  textAnchor="middle" fill={C.dim}   fontSize={7}>PKR total</text>
-            <text x={cx} y={cy + 15} textAnchor="middle" fill={totalPnl >= 0 ? C.greenText : C.redText} fontSize={8} fontWeight={600}>
+            <text x={50} y={46}  textAnchor="middle" fill={C.text}  fontSize={8}  fontWeight={700}>{fmtPKR(totalMV)}</text>
+            <text x={50} y={55}  textAnchor="middle" fill={C.dim}   fontSize={6.5}>PKR total</text>
+            <text x={50} y={65} textAnchor="middle" fill={totalPnl >= 0 ? C.greenText : C.redText} fontSize={7} fontWeight={600}>
               {totalPnl >= 0 ? "+" : "-"}{fmtPKR(totalPnl)}
             </text>
           </svg>
-          {/* Stock legend */}
-          {slices.map(s => {
-            const alloc = totalMV > 0 ? (s.marketVal / totalMV * 100).toFixed(1) : "0";
-            return (
-              <div key={s.ticker} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0, display: "inline-block" }} />
-                <span style={{ fontSize: 10, fontWeight: 600, color: C.text }}>{s.ticker}</span>
-                <span style={{ fontSize: 9, color: C.dim, marginLeft: "auto" }}>{alloc}%</span>
-              </div>
-            );
-          })}
-          {/* Sector breakdown */}
-          {sectors.length > 0 && (
-            <div style={{ marginTop: 7, paddingTop: 6, borderTop: `0.5px solid ${C.border}` }}>
-              <div style={{ fontSize: 7, color: C.dim, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Sectors</div>
-              {sectors.map(([sector, val], i) => {
-                const pct = totalMV > 0 ? ((val / totalMV) * 100).toFixed(0) : "0";
-                return (
-                  <div key={sector} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0, display: "inline-block" }} />
-                    <span style={{ fontSize: 9, color: C.muted }}>{sector}</span>
-                    <span style={{ fontSize: 9, color: C.text, fontWeight: 500, marginLeft: "auto" }}>{pct}%</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
 
-        {/* ── RIGHT: Portfolio calculations table ── */}
+        {/* ── RIGHT: Companies + financial columns ── */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Header KPIs */}
-          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: 5, alignItems: "baseline" }}>
+
+          {/* KPI summary line */}
+          <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
               <span style={{ fontSize: 8, color: C.dim }}>Value</span>
               <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>PKR {fmtPKR(totalMV)}</span>
             </div>
-            <div style={{ display: "flex", gap: 5, alignItems: "baseline" }}>
+            <div style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
               <span style={{ fontSize: 8, color: C.dim }}>Invested</span>
               <span style={{ fontSize: 10, color: C.muted }}>PKR {fmtPKR(totalCost)}</span>
             </div>
-            <div style={{ display: "flex", gap: 5, alignItems: "baseline" }}>
+            <div style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
               <span style={{ fontSize: 8, color: C.dim }}>P&L</span>
               <span style={{ fontSize: 11, fontWeight: 600, color: totalPnl >= 0 ? C.greenText : C.redText }}>
                 {totalPnl >= 0 ? "+" : "-"}PKR {fmtPKR(totalPnl)}
               </span>
-              <span style={{ fontSize: 9, color: totalPct >= 0 ? C.greenText : C.redText }}>
-                ({totalPct >= 0 ? "+" : ""}{totalPct.toFixed(1)}%)
-              </span>
+              <span style={{ fontSize: 9, color: totalPct >= 0 ? C.greenText : C.redText }}>({totalPct >= 0 ? "+" : ""}{totalPct.toFixed(1)}%)</span>
             </div>
           </div>
 
-          {/* Column headers */}
-          <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 68px 86px 42px 42px", gap: "2px 6px", marginBottom: 5 }}>
-            {["Stock", "Allocation", "Invested", "Unrealised P&L", "P&L%", "Today"].map(h => (
-              <span key={h} style={{ fontSize: 7, color: C.dim, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</span>
-            ))}
-          </div>
+          {/* COMPANIES section */}
+          <div style={{ fontSize: 8, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 7 }}>Companies</div>
 
-          {/* Per-holding rows */}
+          {/* Per-holding rows: wide allocation bar + financial columns */}
           {rows.map(r => {
             const alloc = totalMV > 0 ? (r.marketVal / totalMV) * 100 : 0;
             return (
-              <div key={r.ticker} style={{ display: "grid", gridTemplateColumns: "44px 1fr 68px 86px 42px 42px", gap: "2px 6px", alignItems: "center", marginBottom: 5 }}>
-                <span style={{ fontSize: 10, fontWeight: 600, color: C.text }}>{r.ticker}</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <div style={{ flex: 1, height: 4, background: C.border2, borderRadius: 2 }}>
-                    <div style={{ width: `${alloc}%`, height: 4, borderRadius: 2, background: r.color }} />
-                  </div>
-                  <span style={{ fontSize: 8, color: C.muted, minWidth: 28, textAlign: "right" }}>{alloc.toFixed(0)}%</span>
+              <div key={r.ticker} style={{ display: "grid", gridTemplateColumns: "48px 1fr 46px 78px 80px 46px 46px", gap: "0 8px", alignItems: "center", marginBottom: 8 }}>
+                {/* Ticker */}
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, flexShrink: 0, display: "inline-block" }} />
+                  <span style={{ fontSize: 10, fontWeight: 600, color: C.text }}>{r.ticker}</span>
                 </div>
+                {/* Wide allocation bar */}
+                <div style={{ height: 6, background: C.border2, borderRadius: 3 }}>
+                  <div style={{ width: `${alloc}%`, height: 6, borderRadius: 3, background: r.color }} />
+                </div>
+                {/* Alloc % */}
+                <span style={{ fontSize: 9, color: C.muted, textAlign: "right" }}>{alloc.toFixed(1)}%</span>
+                {/* Invested */}
                 <span style={{ fontSize: 9, color: C.muted }}>PKR {fmtPKR(r.costBasis)}</span>
+                {/* P&L */}
                 <span style={{ fontSize: 9, fontWeight: 500, color: r.pnl >= 0 ? C.greenText : C.redText }}>
                   {r.pnl >= 0 ? "+" : "-"}PKR {fmtPKR(r.pnl)}
                 </span>
+                {/* P&L % */}
                 <span style={{ fontSize: 9, color: r.pnlPct >= 0 ? C.greenText : C.redText }}>
                   {r.pnlPct >= 0 ? "+" : ""}{r.pnlPct.toFixed(1)}%
                 </span>
-                <span style={{ fontSize: 8, color: r.changeToday !== undefined ? (r.changeToday >= 0 ? C.greenText : C.redText) : C.dim }}>
+                {/* Today */}
+                <span style={{ fontSize: 9, color: r.changeToday !== undefined ? (r.changeToday >= 0 ? C.greenText : C.redText) : C.dim }}>
                   {r.changeToday !== undefined ? `${r.changeToday >= 0 ? "+" : ""}${r.changeToday.toFixed(1)}%` : "—"}
                 </span>
               </div>
@@ -748,9 +723,8 @@ function HoldingsOverview({ holdings, prices }: {
           })}
 
           {/* Total row */}
-          <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 68px 86px 42px 42px", gap: "2px 6px", alignItems: "center", borderTop: `0.5px solid ${C.border}`, paddingTop: 5, marginTop: 2 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: C.text }}>Total</span>
-            <span style={{ fontSize: 8, color: C.dim }}>{holdings.length} stock{holdings.length !== 1 ? "s" : ""}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 46px 78px 80px 46px 46px", gap: "0 8px", alignItems: "center", borderTop: `0.5px solid ${C.border}`, paddingTop: 6, marginTop: 2 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: C.text, gridColumn: "1/4" }}>Total</span>
             <span style={{ fontSize: 9, color: C.muted }}>PKR {fmtPKR(totalCost)}</span>
             <span style={{ fontSize: 10, fontWeight: 600, color: totalPnl >= 0 ? C.greenText : C.redText }}>
               {totalPnl >= 0 ? "+" : "-"}PKR {fmtPKR(totalPnl)}
@@ -760,6 +734,23 @@ function HoldingsOverview({ holdings, prices }: {
             </span>
             <span />
           </div>
+
+          {/* SECTORS row */}
+          {sectors.length > 0 && (
+            <div style={{ marginTop: 10, paddingTop: 7, borderTop: `0.5px solid ${C.border}`, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 8, color: C.dim, textTransform: "uppercase", letterSpacing: 0.5 }}>Sectors</span>
+              {sectors.map(([sector, val], i) => {
+                const pct = totalMV > 0 ? ((val / totalMV) * 100).toFixed(0) : "0";
+                return (
+                  <span key={sector} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: C.muted }}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0, display: "inline-block" }} />
+                    {sector}
+                    <span style={{ color: C.text, fontWeight: 500 }}>{pct}%</span>
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
