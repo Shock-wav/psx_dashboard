@@ -554,9 +554,7 @@ type StockTech = StockTechLocal;
 
 // ─── Holdings ──────────────────────────────────────────────────────────────
 interface Holding { ticker: string; name: string; shares: number; avgPrice: number; shariah: boolean; }
-const DEFAULT_HOLDINGS: Holding[] = [
-  { ticker: "BNL", name: "Bunny's Ltd", shares: 13450, avgPrice: 7.14, shariah: true },
-];
+const DEFAULT_HOLDINGS: Holding[] = [];
 
 // ─── Watchlist ─────────────────────────────────────────────────────────────
 interface WatchItem { ticker: string; name: string; }
